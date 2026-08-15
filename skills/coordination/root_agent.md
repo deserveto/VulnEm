@@ -19,8 +19,16 @@ surface, not by tool. Good default split for a web app:
 | recon-mapping | recon | surface map, headers, info disclosure |
 | auth-testing | auth_jwt, broken_access_control | authn/authz bypass, JWT flaws, IDOR |
 | injection-testing | sql_injection, command_injection, ssti | injection classes on inputs found |
-| client-side | xss, open_redirect, prototype_pollution | XSS, redirects, client-side bugs |
+| client-side | xss, browser_testing | XSS (reflected/stored/DOM), redirects |
 | data-and-uploads | file_upload, business_logic | upload abuse, logic flaws, data exposure |
+
+Specialists have browser tools (stateful headless Chromium per agent) and
+proxy tools (captured-traffic inspection/replay) alongside curl-class tools.
+On authenticated scans the session is already established for them —
+objectives should say "use the authenticated session", never carry
+credentials. Client-side missions should explicitly demand browser-level
+execution proof (dialog/marker) + screenshot for XSS findings, not just
+curl reflection.
 
 Adapt to the target: a pure API gets API-heavy missions; a loginless site
 drops auth. 3-5 specialists in the first wave; hold one follow-up slot in
