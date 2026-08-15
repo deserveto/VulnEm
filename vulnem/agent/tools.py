@@ -151,6 +151,24 @@ SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
                         "description": "Optional CVSS base score 0.0-10.0 matching the vector.",
                     },
                     "url": {"type": "string", "description": "Affected URL (enables cross-agent dedupe)."},
+                    "file": {
+                        "type": "string",
+                        "description": (
+                            "White-box: source file where the flaw lives, relative "
+                            "to the mounted source root (e.g. app/routes.py)."
+                        ),
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "White-box: line number of the flaw in `file`.",
+                    },
+                    "fix_patch": {
+                        "type": "string",
+                        "description": (
+                            "White-box: minimal unified diff (--- a/... +++ b/...) "
+                            "that fixes the finding. Base it on the actual code."
+                        ),
+                    },
                 },
                 "required": [
                     "title",
@@ -259,6 +277,9 @@ def _tool_report_finding(ctx: ToolContext, args: dict[str, Any]) -> str:
             url=args.get("url") or None,
             cvss_vector=args.get("cvss_vector") or None,
             cvss_score=args.get("cvss_score"),
+            file=args.get("file") or None,
+            line=args.get("line"),
+            fix_patch=args.get("fix_patch") or None,
             reported_by=ctx.agent_name or "solo-agent",
         )
     except (KeyError, ValueError) as exc:

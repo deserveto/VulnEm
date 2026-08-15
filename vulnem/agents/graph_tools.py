@@ -266,6 +266,7 @@ async def _tool_create_agent(sess: AgentSession, args: dict[str, Any]) -> str:
         sess.scope, name=name, objective=objective,
         parent_name=record.name, max_turns=max_turns,
         authenticated=bool(sess.ctx.auth_cookies),
+        whitebox_mount=getattr(sess.sandbox, "source_mount", None),
     )
     child_session = AgentSession(
         record=child,

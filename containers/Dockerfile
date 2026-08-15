@@ -39,6 +39,13 @@ RUN git clone --depth 1 https://github.com/sullo/nikto /opt/nikto && \
 # Python libs agents commonly need for PoCs (stdlib-only also works).
 RUN pip3 install --break-system-packages --no-cache-dir requests
 
+# Phase 4 white-box: semgrep + a vendored ruleset, so source analysis works
+# with NO internet (the registry is unreachable on internal lab networks).
+# Rules are validated at build time — a broken rule file fails the build.
+COPY semgrep-rules/ /opt/semgrep-rules/
+RUN pip3 install --break-system-packages --no-cache-dir semgrep && \
+    semgrep --validate --config /opt/semgrep-rules
+
 # Headless Chromium via Playwright, baked in at build time so browser tooling
 # works with NO internet access (lab networks are internal). Browsers go to a
 # system-wide path so the non-root pentester user finds them. The browser runs

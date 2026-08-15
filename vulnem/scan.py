@@ -189,6 +189,7 @@ async def run_scan(
 
     tasks: list[asyncio.Task] = []
     root_record: AgentRecord | None = None
+    whitebox_mount = getattr(sandbox, "source_mount", None)
 
     def make_session(record: AgentRecord, *, system_prompt: str, initial_task: str,
                      tool_names: set[str], finish_tool: str,
@@ -263,7 +264,8 @@ async def run_scan(
         session = make_session(
             record,
             system_prompt=build_system_prompt(scope, max_turns=settings.max_turns,
-                                              authenticated=bool(auth_cookies)),
+                                              authenticated=bool(auth_cookies),
+                                              whitebox_mount=whitebox_mount),
             initial_task=build_initial_task(scope, authenticated=bool(auth_cookies),
                                             focus=focus),
             tool_names=SOLO_TOOLS,
@@ -283,7 +285,8 @@ async def run_scan(
             system_prompt=build_root_prompt(
                 scope, max_turns=settings.max_turns, budget_turns=budget.max_turns
             ),
-            initial_task=build_root_initial_task(scope, focus=focus),
+            initial_task=build_root_initial_task(scope, focus=focus,
+                                                 whitebox_mount=whitebox_mount),
             tool_names=ROOT_TOOLS,
             finish_tool=FINISH_TOOL,
         )

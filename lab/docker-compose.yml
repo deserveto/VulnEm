@@ -29,6 +29,18 @@ services:
       - "127.0.0.1:4280:80"
     networks: [default, labnet]
 
+  vuln-app:
+    build: ./vulnapp
+    # VulnEm's own vulnerable app: stdlib-only Python with PLANTED flaws
+    # (SQLi, reflected XSS, path traversal, command injection, secret leak).
+    # Source ships in lab/vulnapp — mount it with `vulnem scan --source
+    # lab/vulnapp` for white-box runs; ground truth in
+    # evals/ground_truth/vuln-app.json.
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5000"
+    networks: [default, labnet]
+
 networks:
   labnet:
     internal: true

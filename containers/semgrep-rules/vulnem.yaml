@@ -1,0 +1,73 @@
+# VulnEm's vendored semgrep starter ruleset — runs with NO internet access
+# (lab networks are internal; the semgrep registry is unreachable there).
+# Deliberately small and sink-shaped: these flag candidate sinks; the agents'
+# job is to read the code, trace reachability, and validate dynamically.
+# FP rate on this set is measured by the eval harness, not assumed.
+rules:
+  - id: python-sql-string-concat
+    languages: [python]
+    severity: ERROR
+    message: SQL query built via string interpolation (injection sink)
+    metadata: {class: sql_injection, cwe: CWE-89}
+    pattern-either:
+      - pattern: $DB.execute(f"...")
+      - pattern: $DB.execute("..." % ...)
+      - pattern: $DB.execute("...".format(...))
+      - pattern: $DB.execute($A + $B)
+      - pattern: $DB.executescript(f"...")
+      - pattern: $CURSOR.executemany(f"...", ...)
+
+  - id: python-command-injection-shell
+    languages: [python]
+    severity: ERROR
+    message: shell command built from variables (command-injection sink)
+    metadata: {class: command_injection, cwe: CWE-78}
+    pattern-either:
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.call(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+      - pattern: subprocess.check_output(..., shell=True, ...)
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+
+  - id: python-path-join-open
+    languages: [python]
+    severity: WARNING
+    message: file open on a joined path that may carry user input (traversal sink)
+    metadata: {class: path_traversal, cwe: CWE-22}
+    pattern-either:
+      - pattern: open(os.path.join($BASE, $REQ), ...)
+      - pattern: open($BASE + $REQ, ...)
+
+  - id: python-hardcoded-secret
+    languages: [python]
+    severity: WARNING
+    message: hardcoded secret-like assignment
+    metadata: {class: hardcoded_secret, cwe: CWE-798}
+    patterns:
+      - pattern: $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i).*(api_key|apikey|secret|token|password|passwd|pwd).*
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: .+
+
+  - id: python-eval-exec
+    languages: [python]
+    severity: ERROR
+    message: dynamic code execution sink
+    metadata: {class: code_execution, cwe: CWE-95}
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: exec(...)
+
+  - id: python-ssti-flask
+    languages: [python]
+    severity: ERROR
+    message: template rendered from a string (SSTI sink)
+    metadata: {class: ssti, cwe: CWE-1336}
+    pattern-either:
+      - pattern: flask.render_template_string(...)
+      - pattern: render_template_string(...)
+      - pattern: $APP.jinja_env.from_string(...)

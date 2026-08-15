@@ -204,8 +204,27 @@ scope and it is enforced in code. Never expand it.
 """
 
 
+_WHITEBOX_BLOCK = """
+## White-box source access
+The target's source code is mounted READ-ONLY at {mount}. Use it:
+- Read the code (rg, sed) to trace input flow to sinks — don't guess black-box.
+- First pass: `semgrep --config /opt/semgrep-rules --json {mount} > /tmp/semgrep.json`
+  (vendored rules, no internet needed). Treat hits as LEADS, not findings.
+- Validate every static lead DYNAMICALLY against the live target before
+  filing — code that looks weak may be unreachable or already mitigated.
+- White-box findings MUST set the `file` and `line` report_finding fields
+  (relative to the source root) and include a minimal `fix_patch` unified
+  diff written from the actual code.
+"""
+
+
+def _whitebox(mount: str | None) -> str:
+    return _WHITEBOX_BLOCK.format(mount=mount) if mount else ""
+
+
 def build_system_prompt(scope: Scope, *, max_turns: int,
-                        authenticated: bool = False) -> str:
+                        authenticated: bool = False,
+                        whitebox_mount: str | None = None) -> str:
     """Solo tester prompt (Phase 1 behavior)."""
     return SYSTEM_PROMPT_TEMPLATE.format(
         scope_block=scope.describe_for_prompt(),
@@ -214,12 +233,12 @@ def build_system_prompt(scope: Scope, *, max_turns: int,
         methodology=_METHODOLOGY_BLOCK,
         testing_rules=_TESTING_RULES_BLOCK.format(max_turns=max_turns),
         max_turns=max_turns,
-    )
+    ) + _whitebox(whitebox_mount)
 
 
 def build_specialist_prompt(
     scope: Scope, *, name: str, objective: str, parent_name: str, max_turns: int,
-    authenticated: bool = False,
+    authenticated: bool = False, whitebox_mount: str | None = None,
 ) -> str:
     return SPECIALIST_PROMPT_TEMPLATE.format(
         name=name,
@@ -231,7 +250,7 @@ def build_specialist_prompt(
         methodology=_METHODOLOGY_BLOCK,
         testing_rules=_TESTING_RULES_BLOCK.format(max_turns=max_turns),
         max_turns=max_turns,
-    )
+    ) + _whitebox(whitebox_mount)
 
 
 def build_root_prompt(
@@ -266,7 +285,8 @@ def build_initial_task(scope: Scope, *, authenticated: bool = False,
     return task
 
 
-def build_root_initial_task(scope: Scope, *, focus: str | None = None) -> str:
+def build_root_initial_task(scope: Scope, *, focus: str | None = None,
+                            whitebox_mount: str | None = None) -> str:
     task = (
         f"Orchestrate an authorized security assessment of {scope.target_url}.\n"
         "Read the `coordination/root_agent` skill, decompose the assessment "
@@ -274,6 +294,13 @@ def build_root_initial_task(scope: Scope, *, focus: str | None = None) -> str:
         "for their reports, follow up on promising leads within budget, then "
         "finish with an executive assessment via finish_scan."
     )
+    if whitebox_mount:
+        task += (
+            f"\n\nWhite-box mode: the target's source is mounted read-only at "
+            f"{whitebox_mount}. Read the `whitebox` skill and include at least "
+            "one source-analysis mission (semgrep + code reading, findings "
+            "with file:line and fix patches)."
+        )
     if focus:
         task += f"\n\n{focus}"
     return task
