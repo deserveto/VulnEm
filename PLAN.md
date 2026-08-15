@@ -4,7 +4,7 @@ Autonomous AI penetration-testing agent for **authorized** security testing,
 built Strix-style: LLM agents + an isolated Docker sandbox full of security
 tooling, driven through recon → testing → validated PoC → report.
 
-This is the living roadmap. Current state: **Phase 3 shipped**, Phase 4 next.
+This is the living roadmap. Current state: **Phase 4 shipped**.
 
 ---
 
@@ -175,23 +175,48 @@ injection — the current Juice Shop sanitizes its stored channels server-side
 (verified), so its designed XSS surface is the DOM one the agent proved.
 Full run accounting in TODO.md.
 
-## Phase 4 — Polish: live UI, reports, white-box, CI
+## Phase 4 — Polish: live UI, reports, white-box, CI ✅ (shipped 2026-08-16)
 
-- **Live viewer** over `transcript.jsonl`: agent graph (nodes = agents,
-  status colors), tool-call stream, findings panel. Textual TUI first
-  (`vulnem tui`); local-only web viewer only if TUI limits bite.
-- **Reports**: SARIF output (CI-friendly), PDF export, severity summary.
-- **White-box mode**: `--source <dir>` mounts the repo into the sandbox,
-  semgrep + agent code-reading; findings link file:line and carry a fix
-  patch (Strix's `apply_patch` pattern).
-- **CI mode**: headless, non-zero exit on findings, `--scope-mode diff`
-  for PR-sized scans.
-- **Evals**: benchmark scripts against Juice Shop + vulhub targets —
-  finding recall, false-positive rate, cost per run; guard against prompt
-  regressions (the a72445a lesson systematized).
+What exists (on top of Phase 3):
 
-Exit criteria: a PR-check CI job that runs VulnEm on this repo's own lab
-and fails on findings.
+- **Live/replay TUI** (`vulnem/ui/`, `vulnem tui <run_dir>`) — a pure
+  reducer (`state.py`) turns `transcript.jsonl` into view state (agent
+  graph with statuses, tool/event stream, findings, flows, scope blocks,
+  screenshots, mail); the Textual app renders it with paced replay
+  (`--speed`, auto ~40s per run), instant mode, and `--follow` for
+  tailing a live scan. Unknown event types degrade to a one-liner — the
+  UI never lags the transcript schema.
+- **Reports** — every scan writes `findings.sarif` (SARIF 2.1.0,
+  validated against the OASIS schema; severity→level, CWE rule ids,
+  `security-severity` for GitHub code scanning, stable partial
+  fingerprints) and `report.pdf` (reportlab: severity table, per-finding
+  detail, monospace PoC/evidence, fix-patch blocks).
+  `vulnem report <run_dir>` re-exports both.
+- **White-box mode** (`--source <dir>`) — source mounted read-only at
+  `/home/pentester/source`; semgrep + a vendored ruleset baked into the
+  sandbox image (build-time validated, works on internet-less lab
+  networks). Workflow encoded in `skills/whitebox.md`: semgrep = leads,
+  code-reading = tracing, dynamic validation = truth; findings carry
+  `file`/`line` and a `fix_patch` unified diff. `lab/vulnapp` is the
+  demo target: a stdlib-only app with six planted flaws (exact ground
+  truth in `evals/ground_truth/vuln-app.json`).
+- **CI mode** — `--ci` (headless, one `VULNEM_RESULT` line, exit 1 on
+  findings), `--fail-on <severity>` threshold, `--scope-mode diff` +
+  `--diff-file` (PR-sized scans: files/endpoints extracted from the
+  diff, injected as a prompt-side narrowing directive — the three scope
+  enforcement layers are untouched). `.github/workflows/ci.yml` runs
+  lint+tests and the pr-check job: VulnEm scans this repo's own lab
+  keylessly (scripted engine) and the job is green only when the
+  fail-on-findings contract holds + SARIF/PDF artifacts verify.
+- **Evals** (`vulnem/evals.py`, `scripts/eval.py`) — ground truth per
+  target (vuln-app: 6 planted; juice-shop: 8 class-level; dvwa: 7
+  module-level), a class+endpoint matcher (CWE canonicalization, title
+  tokens, SPA fragment routes), and recall / FP-rate / cost scoring
+  (tokens, turns, wall time). Scores recorded runs or launches fresh
+  scans; tables land in `evals/results/`.
+
+Exit criteria: MET (2026-08-16) — CI job + TUI + SARIF validated + eval
+table; run accounting in TODO.md.
 
 ---
 

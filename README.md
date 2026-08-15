@@ -35,14 +35,16 @@ vulnem demo
 ```
 
 Reports land in `runs/<timestamp>-<host>/` — `report.md` (human),
-`findings.json` (structured), `transcript.jsonl` (every turn, tool call, and
-result — the data source for a future live UI).
+`findings.json` (structured), `findings.sarif` (CI/code-scanning),
+`report.pdf` (export), `transcript.jsonl` (every turn, tool call, and
+result — the data source for the live UI). Watch any run with
+`vulnem tui runs/<id>`; re-export SARIF/PDF with `vulnem report runs/<id>`.
 
 ## Scanning your own lab target
 
 ```bash
-# Reusable lab you can also browse at http://localhost:3000 (Juice Shop)
-# and http://localhost:4280 (DVWA):
+# Reusable lab you can also browse at http://localhost:3000 (Juice Shop),
+# http://localhost:4280 (DVWA) and http://localhost:5001 (VulnApp):
 docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
 vulnem scan http://juice-shop:3000 --network vulnem-lab_labnet
 
@@ -51,6 +53,16 @@ vulnem scan http://juice-shop:3000 --network vulnem-lab_labnet \
   --creds lab/juice-shop-creds.json --budget 200
 vulnem scan http://dvwa --network vulnem-lab_labnet \
   --creds lab/dvwa-creds.json --budget 200
+
+# White-box: mount the target's source (read-only) — semgrep + agent code
+# reading; findings carry file:line and a fix patch:
+vulnem scan http://vuln-app:5000 --network vulnem-lab_labnet \
+  --source lab/vulnapp --budget 100
+
+# CI / PR gate: headless, exit 1 on findings (or --fail-on <severity>),
+# PR-sized scans focused on the diff:
+vulnem scan http://vuln-app:5000 --network vulnem-lab_labnet \
+  --ci --fail-on high --scope-mode diff --source . --yes
 
 # Any containerized target: attach the sandbox to the same Docker network.
 ```
@@ -125,6 +137,31 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
   finding carries evidence + PoC + remediation + CVSS + reporter;
   overlapping findings from different agents (same endpoint + class) merge
   into one with combined evidence and attribution.
+- **Reports** (`vulnem/report/`) — every scan writes `report.md`,
+  `findings.json`, `findings.sarif` (SARIF 2.1.0 — validated against the
+  OASIS schema, severity→level mapping, CWE rule ids, stable fingerprints
+  for CI dedupe) and `report.pdf` (severity table + per-finding detail with
+  monospace PoC/evidence). `vulnem report <run_dir>` re-exports both.
+- **White-box mode** (`--source <dir>`) — the target's source is mounted
+  read-only into the sandbox; the image carries semgrep plus a vendored
+  ruleset (works on internet-less lab networks). Static hits are treated as
+  leads; agents validate them dynamically and file findings with `file` +
+  `line` and a `fix_patch` unified diff written from the real code.
+- **Live/replay UI** (`vulnem tui <run_dir>`) — Textual TUI over
+  `transcript.jsonl`: agent graph with status colors, live tool/event
+  stream, findings table, traffic/scope-block/screenshot stats. Replay a
+  recorded run at `--speed` (default auto), or `--follow` a live scan.
+- **CI mode** (`--ci`) — headless, one `VULNEM_RESULT` summary line,
+  exit 1 when findings at/above `--fail-on` severity exist;
+  `--scope-mode diff` (+ `--diff-file` or a `--source` git repo) focuses
+  the scan on files/endpoints from the PR diff — prompt-level narrowing,
+  the three scope layers are never weakened. This repo's own CI
+  (`.github/workflows/ci.yml`) runs VulnEm keylessly against its lab and
+  verifies the fail-on-findings contract.
+- **Evals** (`scripts/eval.py`) — recall / false-positive-rate / cost
+  benchmarks against ground truth (`evals/ground_truth/*.json`) for
+  Juice Shop, DVWA and VulnApp; scores recorded runs or launches fresh
+  scans, and writes tables to `evals/results/`.
 
 ## Configuration
 
@@ -144,8 +181,12 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
 Useful flags: `vulnem scan --budget N` (scan-wide turn budget),
 `--max-agents N`, `--solo` (Phase 1 single-agent mode),
 `--creds <file>` (authenticated scan — secrets stay out of prompts),
-`--no-proxy` (drop the mitmproxy sidecar layer), `vulnem resume <run_dir>
-[--extend-turns N]` (continue an interrupted scan from its snapshot).
+`--source <dir>` (white-box: source mounted read-only), `--ci` +
+`--fail-on <severity>` (headless gate), `--scope-mode diff` +
+`--diff-file <f>` (PR-sized scans), `--no-proxy` (drop the mitmproxy
+sidecar layer), `vulnem resume <run_dir> [--extend-turns N]` (continue an
+interrupted scan from its snapshot), `vulnem tui <run_dir> [--follow]`
+(live/replay UI), `vulnem report <run_dir>` (re-export SARIF + PDF).
 
 ## Safety model
 
@@ -172,8 +213,9 @@ Useful flags: `vulnem scan --budget N` (scan-wide turn budget),
   budgets, crash isolation, cross-agent dedupe, snapshot/resume
 - [x] Phase 3 — browser tool (Playwright) + HTTP proxy with scope enforcement,
   authenticated scans, DVWA second lab target
-- [ ] Phase 4 — live TUI/web viewer over `transcript.jsonl`, SARIF output,
-  white-box mode, evals
+- [x] Phase 4 — live TUI, SARIF/PDF reports, white-box mode (semgrep +
+  file:line + fix patches), CI mode with PR-check workflow, eval harness
+  (recall/FP/cost), VulnApp planted-flaw lab target
 
 ## Legal
 

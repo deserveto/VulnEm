@@ -67,7 +67,7 @@ root spawned 5 specialists in parallel, parked in wait_for_agents, handled
 with CVSS + attribution. Tuning notes for Phase 3: child turn caps tight
 for verbose models; fragile-target probing reminder needed.
 
-## Phase 3 — Browser + proxy ← CURRENT
+## Phase 3 — Browser + proxy ✅ DONE (2026-08-16)
 
 - [x] Playwright headless Chromium in sandbox image (baked at build time,
       system-wide browser path; works with no internet at runtime)
@@ -128,13 +128,41 @@ run; the literal combination (stored XSS on Juice Shop as a filed finding)
 is not achievable on the current target without a real 0-day, since the
 server sanitizes the stored channels the agent correctly identified.
 
-## Phase 4 — Polish
+## Phase 4 — Polish ✅ DONE (2026-08-16)
 
-- [ ] Live TUI (Textual) over transcript.jsonl: agent graph + tool stream + findings
-- [ ] SARIF report output; PDF export
-- [ ] White-box mode: `--source`, semgrep, file:line findings, fix patches
-- [ ] CI mode: headless, exit-code-on-findings, diff-scoped PR scans
-- [ ] Eval harness: recall/FP/cost benchmarks on Juice Shop + vulhub
+- [x] Live TUI (Textual) over transcript.jsonl: agent graph + tool stream +
+      findings (`vulnem/ui/state.py` pure reducer — every event type has a
+      home, unknown types degrade to a one-liner; `vulnem tui <run_dir>`
+      with paced replay / `--speed 0` instant / `--follow` for live scans;
+      headless pilot tests + reducer tests against the two richest
+      recorded runs)
+- [x] SARIF report output (OASIS-schema-validated, severity→level, CWE
+      rule ids, GitHub security-severity, stable fingerprints) + PDF
+      export (reportlab) + `vulnem report` re-export cmd; both written
+      automatically at scan end
+- [x] White-box mode: `--source <dir>` read-only mount, semgrep + vendored
+      ruleset in the sandbox image (build-validated, offline-usable),
+      `skills/whitebox.md` methodology, findings carry file:line +
+      fix_patch (rendered in report.md/PDF, region-mapped in SARIF);
+      `lab/vulnapp` planted-flaw demo target (6 flaws, exact ground truth)
+- [x] CI mode: `--ci` headless + VULNEM_RESULT line, `--fail-on` severity
+      threshold, `--scope-mode diff`/`--diff-file` PR-sized scans
+      (prompt-level focus; scope enforcement layers never weakened);
+      `.github/workflows/ci.yml` lint+test job + keyless pr-check job that
+      runs VulnEm on this repo's own lab and verifies fail-on-findings +
+      SARIF/PDF artifacts (mock e2e tightened to require exit 1)
+- [x] Eval harness: `scripts/eval.py` + `vulnem/evals.py` — ground truth
+      (vuln-app 6 planted, juice-shop 8 class-level, dvwa 7 modules),
+      class+endpoint matcher, recall/FP/cost tables to evals/results/
+
+Real-run accounting (2026-08-16, hcnsec relay `openai/auto` →
+agnes-2.5-flash, all `--budget`-bound): see `evals/results/` tables.
+Historical poolside baselines: 38% recall / 40% FP (juice ea92),
+43% / 0% (dvwa-6251), 25% / 0% (a079).
+
+Phase 4 exit criteria: MET — CI pr-check job live, TUI replays recorded
+runs, SARIF validated against the OASIS schema, eval table from multiple
+targets.
 
 ## Parking lot (unscheduled)
 
