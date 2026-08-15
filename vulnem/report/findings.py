@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 SEVERITIES = tuple(SEVERITY_ORDER)
+CONFIDENCE_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 
 class Finding(BaseModel):
@@ -19,12 +22,17 @@ class Finding(BaseModel):
     title: str
     severity: str = Field(pattern="^(critical|high|medium|low|info)$")
     cwe: str | None = None
+    cvss_vector: str | None = Field(
+        default=None, description="CVSS vector string, e.g. CVSS:3.1/AV:N/AC:L/..."
+    )
+    cvss_score: float | None = Field(default=None, ge=0, le=10)
     description: str
     evidence: str = Field(description="Raw output proving the issue (command + response)")
     poc: str = Field(description="Step-by-step reproduction instructions")
     remediation: str
     confidence: str = Field(default="high", pattern="^(high|medium|low)$")
     url: str | None = None
+    reported_by: str = Field(default="", description="Agent that filed the finding")
 
     def sort_key(self) -> tuple[int, str]:
         return (SEVERITY_ORDER.get(self.severity, 99), self.title.lower())
@@ -81,10 +89,15 @@ class FindingsReport(BaseModel):
         for i, f in enumerate(ordered, start=1):
             lines += [f"## [{f.severity.upper()}] {i}. {f.title}", ""]
             meta = [f"- Severity: {f.severity}", f"- Confidence: {f.confidence}"]
+            if f.cvss_vector:
+                score = f" ({f.cvss_score:g})" if f.cvss_score is not None else ""
+                meta.append(f"- CVSS: {f.cvss_vector}{score}")
             if f.cwe:
                 meta.append(f"- CWE: {f.cwe}")
             if f.url:
                 meta.append(f"- URL: {f.url}")
+            if f.reported_by:
+                meta.append(f"- Reported by: {f.reported_by}")
             lines += [*meta, "", "### Description", "", f.description, ""]
             lines += ["### Proof of Concept", "", "```", f.poc.strip(), "```", ""]
             lines += ["### Evidence", "", "```", f.evidence.strip(), "```", ""]
@@ -92,13 +105,76 @@ class FindingsReport(BaseModel):
         return "\n".join(lines)
 
 
+def _normalize_endpoint(url: str) -> str:
+    """Reduce a URL to its comparable endpoint key.
+
+    Path only, lowercase, trailing slash stripped, and digit-only segments
+    collapsed to ``{id}`` — /api/users/1 and /api/users/2 are the same
+    endpoint for finding-dedupe purposes (IDOR affects the collection).
+    """
+    try:
+        parts = urlsplit(url.strip())
+        path = parts.path or "/"
+        segments = ("{id}" if seg.isdigit() else seg for seg in path.split("/"))
+        normalized = "/".join(segments).rstrip("/").lower()
+        return normalized or "/"
+    except ValueError:
+        return url.strip().lower()
+
+
+def _class_key(finding: Finding) -> str:
+    """Vulnerability class: CWE when known, else salient title tokens."""
+    if finding.cwe:
+        return finding.cwe.strip().upper()
+    stop = {"the", "a", "an", "in", "on", "of", "via", "to", "and", "with", "at", "by"}
+    tokens = [t for t in re.findall(r"[a-z0-9]+", finding.title.lower()) if t not in stop]
+    return " ".join(tokens[:4])
+
+
+def _merge_duplicate(base: Finding, dup: Finding) -> Finding:
+    """Collapse two findings on the same endpoint+class into one, merging evidence."""
+    if SEVERITY_ORDER.get(dup.severity, 99) < SEVERITY_ORDER.get(base.severity, 99):
+        base, dup = dup, base
+    attribution = dup.reported_by or "another agent"
+    base.evidence = (
+        f"{base.evidence.rstrip()}\n\n--- also reported by {attribution} ---\n{dup.evidence.rstrip()}"
+    )
+    if not base.poc.strip() and dup.poc.strip():
+        base.poc = dup.poc
+    if CONFIDENCE_ORDER.get(dup.confidence, 0) > CONFIDENCE_ORDER.get(base.confidence, 0):
+        base.confidence = dup.confidence
+    if dup.cvss_score is not None and (base.cvss_score is None or dup.cvss_score > base.cvss_score):
+        base.cvss_score = dup.cvss_score
+        base.cvss_vector = dup.cvss_vector or base.cvss_vector
+    names = [n for n in (base.reported_by, dup.reported_by) if n]
+    base.reported_by = ", ".join(dict.fromkeys(names))
+    return base
+
+
 def dedupe(findings: list[Finding]) -> list[Finding]:
-    """Drop near-duplicate findings by (normalized title, severity)."""
-    seen: dict[tuple[str, str], Finding] = {}
+    """Collapse duplicates across agents.
+
+    Same endpoint + same vulnerability class merges into one finding with
+    merged evidence and attribution (agents overlap; the report must not).
+    Findings without a URL fall back to the (title, severity) key.
+    """
+    by_endpoint: dict[tuple[str, str], Finding] = {}
+    by_title: dict[tuple[str, str], Finding] = {}
     for f in findings:
-        key = (f.title.strip().lower(), f.severity)
-        seen.setdefault(key, f)
-    return sorted(seen.values(), key=lambda f: f.sort_key())
+        if f.url:
+            key = (_normalize_endpoint(f.url), _class_key(f))
+            if key in by_endpoint:
+                by_endpoint[key] = _merge_duplicate(by_endpoint[key], f)
+            else:
+                by_endpoint[key] = f
+        else:
+            key = (f.title.strip().lower(), f.severity)
+            if key in by_title:
+                by_title[key] = _merge_duplicate(by_title[key], f)
+            else:
+                by_title[key] = f
+    merged = list(by_endpoint.values()) + list(by_title.values())
+    return sorted(merged, key=lambda f: f.sort_key())
 
 
 def utc_now_iso() -> str:

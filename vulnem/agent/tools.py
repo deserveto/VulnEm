@@ -29,13 +29,14 @@ def truncate(text: str, limit: int = OUTPUT_TRUNCATE_CHARS) -> str:
 
 @dataclass(slots=True)
 class ToolContext:
-    """Everything tool implementations need, owned by the agent loop."""
+    """Everything tool implementations need, owned by the agent session."""
 
     settings: Settings
     sandbox: Sandbox
     scope_host: str
     findings: list[Finding] = field(default_factory=list)
     transcript_events: list[dict[str, Any]] = field(default_factory=list)
+    agent_name: str = ""  # set by the session; stamps findings + transcripts
 
     def record(self, event: dict[str, Any]) -> None:
         self.transcript_events.append(event)
@@ -122,7 +123,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Optional CWE id, e.g. CWE-89.",
                     },
-                    "url": {"type": "string", "description": "Optional affected URL."},
+                    "cvss_vector": {
+                        "type": "string",
+                        "description": (
+                            "Optional CVSS vector, e.g. "
+                            "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+                        ),
+                    },
+                    "cvss_score": {
+                        "type": "number",
+                        "description": "Optional CVSS base score 0.0-10.0 matching the vector.",
+                    },
+                    "url": {"type": "string", "description": "Affected URL (enables cross-agent dedupe)."},
                 },
                 "required": [
                     "title",
@@ -186,10 +198,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 
 
 def _list_skills(skills_dir: Path) -> list[dict[str, str]]:
+    """List skill packs recursively; names are paths relative to skills_dir."""
     packs: list[dict[str, str]] = []
     if not skills_dir.is_dir():
         return packs
-    for path in sorted(skills_dir.glob("*.md")):
+    for path in sorted(skills_dir.rglob("*.md")):
         description = ""
         text = path.read_text(encoding="utf-8")
         if text.startswith("---"):
@@ -198,7 +211,8 @@ def _list_skills(skills_dir: Path) -> list[dict[str, str]]:
                 if line.lower().startswith("description:"):
                     description = line.partition(":")[2].strip()
                     break
-        packs.append({"name": path.stem, "description": description})
+        packs.append({"name": path.relative_to(skills_dir).with_suffix("").as_posix(),
+                      "description": description})
     return packs
 
 
@@ -223,10 +237,11 @@ def _tool_read_skill(ctx: ToolContext, args: dict[str, Any]) -> str:
     if not name:
         listing = "\n".join(f"- {p['name']}: {p['description']}" for p in packs)
         return f"Available skills:\n{listing or '(none found)'}"
-    safe = Path(name).name  # no traversal
-    path = ctx.settings.skills_dir / f"{safe}.md"
+    # Allow nested names (coordination/root_agent) but never escape skills_dir.
+    safe = Path(*[part for part in Path(name).parts if part not in ("..", "/", "\\")])
+    path = (ctx.settings.skills_dir / safe).with_suffix(".md")
     if not path.is_file():
-        return f"Skill '{safe}' not found. List skills by calling read_skill with no name."
+        return f"Skill '{name}' not found. List skills by calling read_skill with no name."
     return truncate(path.read_text(encoding="utf-8"), 24_000)
 
 
@@ -240,8 +255,11 @@ def _tool_report_finding(ctx: ToolContext, args: dict[str, Any]) -> str:
             poc=str(args["poc"]),
             remediation=str(args["remediation"]),
             confidence=str(args.get("confidence") or "high"),
-            cwe=args.get("cwe"),
-            url=args.get("url"),
+            cwe=args.get("cwe") or None,
+            url=args.get("url") or None,
+            cvss_vector=args.get("cvss_vector") or None,
+            cvss_score=args.get("cvss_score"),
+            reported_by=ctx.agent_name or "solo-agent",
         )
     except (KeyError, ValueError) as exc:
         return json.dumps({"ok": False, "error": f"invalid finding: {exc}"})
