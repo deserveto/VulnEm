@@ -39,6 +39,14 @@ RUN git clone --depth 1 https://github.com/sullo/nikto /opt/nikto && \
 # Python libs agents commonly need for PoCs (stdlib-only also works).
 RUN pip3 install --break-system-packages --no-cache-dir requests
 
+# Headless Chromium via Playwright, baked in at build time so browser tooling
+# works with NO internet access (lab networks are internal). Browsers go to a
+# system-wide path so the non-root pentester user finds them. The browser runs
+# with --no-sandbox (container isolation is the security boundary).
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN pip3 install --break-system-packages --no-cache-dir playwright && \
+    python3 -m playwright install --with-deps chromium
+
 COPY --from=builder /out/bin/ /usr/local/bin/
 
 # Non-root operator with passwordless sudo (some tools insist on it).

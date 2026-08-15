@@ -9,6 +9,7 @@ One entry point, two shapes:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Callable
@@ -119,6 +120,8 @@ async def run_scan(
     completion_fn: CompletionFn | None = None,
     budget_turns: int | None = None,
     resume_state: dict[str, Any] | None = None,
+    proxy: Any | None = None,
+    creds: Any | None = None,
 ) -> ScanResult:
     """Run one scan (solo or coordinated graph) to completion."""
     if resume_state is not None:
@@ -135,6 +138,31 @@ async def run_scan(
     exec_semaphore = asyncio.Semaphore(settings.max_concurrent_exec)
     transcript = run_dir / "transcript.jsonl"
 
+    # -- Phase 3 plumbing: proxy sidecar + authenticated session ----------------
+    poll_task: asyncio.Task | None = None
+    auth_cookies: list[dict[str, Any]] = []
+    if proxy is not None:
+        proxy.bind(coordinator, run_dir)
+        poll_task = asyncio.create_task(proxy.poll_loop(), name="proxy-poller")
+        coordinator.emit({
+            "type": "proxy_started",
+            "sidecar": proxy.name,
+            "network": settings.docker_network or "default",
+            "scope_hosts": list(scope.allowed_hosts),
+        })
+    if creds is not None:
+        from vulnem.auth import AuthSession, stage_session
+
+        auth = AuthSession(creds)
+        result_auth = await asyncio.to_thread(
+            auth.establish, sandbox=sandbox, proxy_url=getattr(sandbox, "proxy_url", None)
+        )
+        coordinator.emit({"type": "auth_established", **result_auth.describe(),
+                          "login_url": creds.login_url})
+        if result_auth.ok:
+            auth_cookies = result_auth.cookies
+            await asyncio.to_thread(stage_session, sandbox, result_auth)
+
     coordinator.emit({
         "type": "scan_start",
         "target": scope.target_url,
@@ -142,6 +170,8 @@ async def run_scan(
         "mode": "solo" if solo else "graph",
         "resumed": resume_state is not None,
         "budget_turns": budget.max_turns,
+        "proxy": proxy is not None,
+        "authenticated": bool(auth_cookies),
     })
 
     tasks: list[asyncio.Task] = []
@@ -163,6 +193,9 @@ async def run_scan(
             completion_fn=completion_fn,
             exec_semaphore=exec_semaphore,
             restored_messages=restored,
+            proxy=proxy,
+            auth_cookies=auth_cookies,
+            run_dir=run_dir,
         )
 
     if resume_state is not None:
@@ -213,8 +246,9 @@ async def run_scan(
         )
         session = make_session(
             record,
-            system_prompt=build_system_prompt(scope, max_turns=settings.max_turns),
-            initial_task=build_initial_task(scope),
+            system_prompt=build_system_prompt(scope, max_turns=settings.max_turns,
+                                              authenticated=bool(auth_cookies)),
+            initial_task=build_initial_task(scope, authenticated=bool(auth_cookies)),
             tool_names=SOLO_TOOLS,
             finish_tool=FINISH_TOOL,
         )
@@ -279,6 +313,16 @@ async def run_scan(
         raise
     finally:
         await coordinator.snapshot_async()
+
+    if poll_task is not None:
+        poll_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await poll_task
+    if proxy is not None:
+        # Last drain so the transcript ends with every captured flow, then
+        # freeze the full proxy log into the run dir as report evidence.
+        await asyncio.to_thread(proxy.drain_final_events)
+        await asyncio.to_thread(proxy.snapshot_evidence, run_dir)
 
     findings = coordinator.collect_findings()
     coordinator.emit({

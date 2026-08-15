@@ -37,8 +37,9 @@ _MAX_TEXT_ONLY_TURNS = 3
 # budget is exhausted; then it is force-stopped.
 _WRAPUP_GRACE_TURNS = 2
 
-# The Phase 1 hands-on toolset shared by solo agents and specialists.
-HANDS_ON_SESSION_TOOLS = ["exec_command", "read_skill", "report_finding", "think"]
+# The Phase 1 hands-on toolset shared by solo agents and specialists
+# (browser_* + proxy_* joined in Phase 3 — all sync handlers).
+HANDS_ON_SESSION_TOOLS = sorted(HANDS_ON_TOOL_NAMES)
 
 CompletionFn = Callable[[list[dict[str, Any]], list[dict[str, Any]]], Any]
 
@@ -88,6 +89,9 @@ class AgentSession:
         completion_fn: CompletionFn | None = None,
         exec_semaphore: asyncio.Semaphore | None = None,
         restored_messages: list[dict[str, Any]] | None = None,
+        proxy: Any | None = None,
+        auth_cookies: list[dict[str, Any]] | None = None,
+        run_dir: Any | None = None,
     ) -> None:
         self.record = record
         self.coordinator = coordinator
@@ -101,6 +105,12 @@ class AgentSession:
         self.ctx = ToolContext(
             settings=settings, sandbox=sandbox, scope_host=scope.host,
             agent_name=record.name,
+            allowed_hosts=scope.allowed_hosts,
+            proxy=proxy,
+            sandbox_proxy_url=getattr(proxy, "sandbox_proxy_url", None),
+            auth_cookies=list(auth_cookies or []),
+            run_dir=run_dir,
+            emit_event=self.emit,
         )
         self.messages: list[dict[str, Any]] = restored_messages if restored_messages is not None else [
             {"role": "system", "content": system_prompt},

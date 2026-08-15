@@ -265,6 +265,7 @@ async def _tool_create_agent(sess: AgentSession, args: dict[str, Any]) -> str:
     system_prompt = build_specialist_prompt(
         sess.scope, name=name, objective=objective,
         parent_name=record.name, max_turns=max_turns,
+        authenticated=bool(sess.ctx.auth_cookies),
     )
     child_session = AgentSession(
         record=child,
@@ -277,6 +278,9 @@ async def _tool_create_agent(sess: AgentSession, args: dict[str, Any]) -> str:
         initial_task=objective,
         completion_fn=None if sess.completion_fn is None else sess.completion_fn,
         exec_semaphore=sess.shared_exec_semaphore(),
+        proxy=sess.ctx.proxy,
+        auth_cookies=sess.ctx.auth_cookies,
+        run_dir=sess.ctx.run_dir,
     )
     coordinator.emit({
         "type": "agent_created",

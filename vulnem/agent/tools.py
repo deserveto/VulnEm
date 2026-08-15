@@ -4,27 +4,19 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from vulnem.config import OUTPUT_TRUNCATE_CHARS, Settings
+from vulnem.config import Settings
 from vulnem.report.findings import Finding, dedupe
 from vulnem.sandbox import Sandbox
+from vulnem.textutil import truncate as truncate  # re-exported for callers/tests
 
 logger = logging.getLogger(__name__)
 
 FINISH_TOOL = "finish_scan"
-
-
-def truncate(text: str, limit: int = OUTPUT_TRUNCATE_CHARS) -> str:
-    """Keep head and tail of long tool output so the model sees both."""
-    if len(text) <= limit:
-        return text
-    head = text[: limit // 2]
-    tail = text[-(limit // 2) :]
-    omitted = len(text) - limit
-    return f"{head}\n... [{omitted} chars truncated] ...\n{tail}"
 
 
 @dataclass(slots=True)
@@ -37,16 +29,33 @@ class ToolContext:
     findings: list[Finding] = field(default_factory=list)
     transcript_events: list[dict[str, Any]] = field(default_factory=list)
     agent_name: str = ""  # set by the session; stamps findings + transcripts
+    # Phase 3 plumbing (all optional so older constructions keep working):
+    allowed_hosts: tuple[str, ...] = ()  # system-verified scope (browser tools)
+    proxy: Any = None                     # ProxyManager (proxy tools)
+    sandbox_proxy_url: str | None = None  # sidecar URL as seen from the sandbox
+    auth_cookies: list[dict[str, Any]] = field(default_factory=list)  # seeded session
+    run_dir: Path | None = None           # artifacts land in run_dir/artifacts/
+    emit_event: Callable[[dict[str, Any]], None] | None = None  # session hook
 
     def record(self, event: dict[str, Any]) -> None:
         self.transcript_events.append(event)
+        if self.emit_event is not None:
+            self.emit_event(event)
 
 
 # -- OpenAI-format tool schemas ------------------------------------------------
 
 # Hands-on tools: every tool whose handler is a plain sync function run in a
-# worker thread (graph tools live in vulnem/agents/graph_tools.py).
-HANDS_ON_TOOL_NAMES = {"exec_command", "read_skill", "report_finding", "think"}
+# worker thread (graph tools live in vulnem/agents/graph_tools.py). The
+# Phase 3 browser + proxy tools follow the same sync pattern.
+from vulnem.tools.browser import BROWSER_HANDLERS, BROWSER_SCHEMAS  # noqa: E402
+from vulnem.tools.proxy import PROXY_HANDLERS, PROXY_SCHEMAS  # noqa: E402
+
+HANDS_ON_TOOL_NAMES = (
+    {"exec_command", "read_skill", "report_finding", "think"}
+    | set(BROWSER_SCHEMAS)
+    | set(PROXY_SCHEMAS)
+)
 
 SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
     "exec_command": {
@@ -176,6 +185,11 @@ SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
 # Kept for Phase 1 compatibility (solo toolset without lifecycle tools).
 TOOL_SCHEMAS: list[dict[str, Any]] = list(SCHEMA_BY_NAME.values())
 
+# Phase 3 tool surfaces merge into the shared registry (browser = stateful
+# headless Chromium per agent; proxy = mitmproxy traffic inspection/replay).
+SCHEMA_BY_NAME.update(BROWSER_SCHEMAS)
+SCHEMA_BY_NAME.update(PROXY_SCHEMAS)
+
 
 # -- Implementations -----------------------------------------------------------
 
@@ -267,12 +281,14 @@ def _tool_finish(ctx: ToolContext, args: dict[str, Any]) -> str:
 
 def dispatch_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> str:
     """Run one tool call; always returns a JSON string for the model."""
-    handlers = {
+    handlers: dict[str, Callable[[ToolContext, dict[str, Any]], str]] = {
         "exec_command": _tool_exec_command,
         "read_skill": _tool_read_skill,
         "report_finding": _tool_report_finding,
         "think": _tool_think,
         FINISH_TOOL: _tool_finish,
+        **BROWSER_HANDLERS,
+        **PROXY_HANDLERS,
     }
     handler = handlers.get(name)
     if handler is None:

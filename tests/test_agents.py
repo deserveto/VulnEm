@@ -15,6 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from vulnem.agents.coordinator import TERMINAL_STATUSES, AgentStatus, Budget, Coordinator, Message
+from vulnem.agents.session import HANDS_ON_SESSION_TOOLS
 from vulnem.config import Settings
 from vulnem.scan import _patch_dangling_tool_calls, run_scan
 from vulnem.scope import Scope
@@ -441,6 +442,25 @@ async def test_solo_mode_still_works(tmp_path):
     assert result.finished and result.stop_reason == "finish_tool"
     assert len(result.findings) == 1 and result.findings[0].reported_by == "solo"
     assert result.findings[0].id == "VULN-001"
+
+
+# -- Phase 3 tool surface -----------------------------------------------------------
+
+
+def test_specialists_get_browser_and_proxy_tools():
+    from vulnem.agent.tools import SCHEMA_BY_NAME
+    from vulnem.scan import SOLO_TOOLS
+
+    for name in ("browser_navigate", "browser_click", "browser_fill",
+                 "browser_read_page", "browser_evaluate", "browser_screenshot",
+                 "list_requests", "view_request", "repeat_request", "view_sitemap"):
+        assert name in HANDS_ON_SESSION_TOOLS, f"{name} missing from hands-on toolset"
+        assert name in SCHEMA_BY_NAME, f"{name} missing schema"
+        assert name in SOLO_TOOLS, f"{name} missing from solo toolset"
+    # root stays delegation-only: no exec/browser/proxy hands-on tools
+    from vulnem.scan import ROOT_TOOLS
+
+    assert not (ROOT_TOOLS & {"exec_command", "browser_navigate", "list_requests"})
 
 
 # -- restore helpers --------------------------------------------------------------

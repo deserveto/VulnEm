@@ -112,6 +112,12 @@ def _on_event(event: dict) -> None:
             console.print(f"{tag}[{color}]▸ finding [{sev}][/{color}] {args.get('title', '')}")
         elif name == "read_skill":
             console.print(f"{tag}[cyan]▸ skill[/cyan] {args.get('name', '(list)')}")
+        elif name.startswith("browser_"):
+            detail = args.get("url") or args.get("selector") or args.get("expression") or ""
+            console.print(f"{tag}[magenta]▸ {name.replace('browser_', 'browser.')}"f"[/magenta] [white]{_shorten(str(detail), 100)}[/white]")
+        elif name in {"list_requests", "view_request", "repeat_request", "view_sitemap"}:
+            console.print(f"{tag}[magenta]▸ {name}[/magenta] "
+                          f"{args.get('id', args.get('q', ''))}")
         elif name == "create_agent":
             console.print(f"{tag}[green]▸ create_agent[/green] {args.get('name', '?')} — {_shorten(args.get('objective', ''), 110)}")
         elif name == "wait_for_agents":
@@ -129,6 +135,18 @@ def _on_event(event: dict) -> None:
                       (f" [dim]({event.get('reason')})[/dim]" if event.get("reason") else ""))
     elif kind == "agent_message":
         console.print(f"[dim]msg {event.get('from')} -> {event.get('to')}: {_shorten(event.get('preview', ''), 100)}[/dim]")
+    elif kind == "screenshot":
+        console.print(f"{tag}[magenta]▣ screenshot[/magenta] {event.get('artifact')} ({event.get('bytes', 0)} bytes)")
+    elif kind == "scope_blocked":
+        console.print(f"[red]✗ SCOPE BLOCK ({event.get('layer')})[/red] "
+                      f"{event.get('method', '')} {event.get('host') or event.get('url', '')}")
+    elif kind == "auth_established":
+        state = "ok" if event.get("ok") else "FAILED"
+        console.print(f"[blue]◉ auth session[/blue] {state} via {event.get('method')} "
+                      f"(cookies: {', '.join(event.get('cookie_names') or []) or 'none'})")
+    elif kind == "proxy_started":
+        console.print(f"[dim]proxy sidecar {event.get('sidecar')} up "
+                      f"(scope: {', '.join(event.get('scope_hosts') or [])})[/dim]")
     elif kind == "scan_end":
         console.print(
             f"\n[bold]Scan ended[/bold] ({event.get('stop_reason')}) — "
@@ -158,8 +176,12 @@ def _write_report(run_dir: Path, settings: Settings, scope: Scope,
 
 
 def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
-              budget: int | None = None) -> int:
+              budget: int | None = None, creds_path: str | None = None,
+              no_proxy: bool = False) -> int:
     import asyncio as _aio
+
+    from vulnem.auth import CredsConfig, CredsError
+    from vulnem.proxy.manager import ProxyError, ProxyManager
 
     try:
         scope = Scope.from_target(target)
@@ -172,6 +194,27 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
         console.print("[red]Authorization not confirmed. Aborting.[/red]")
         return 2
 
+    creds: CredsConfig | None = None
+    if creds_path:
+        try:
+            creds = CredsConfig.load(creds_path)
+        except CredsError as exc:
+            console.print(f"[red]Credentials file error:[/red] {exc}")
+            return 2
+
+    proxy: ProxyManager | None = None
+    if no_proxy:
+        console.print("[yellow]Proxy disabled (--no-proxy): network-layer scope "
+                      "enforcement and traffic capture are OFF. The prompt scope "
+                      "and (for labs) the internal network remain.[/yellow]")
+    else:
+        proxy = ProxyManager(scope=scope, network=settings.docker_network)
+        try:
+            proxy.start()
+        except ProxyError as exc:
+            console.print(f"[red]Proxy sidecar error:[/red] {exc}")
+            return 2
+
     _check_model_ready(settings)
     run_dir = _new_run_dir(settings, scope.host)
     (run_dir / "config.json").write_text(
@@ -183,6 +226,8 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
                 "max_turns": settings.max_turns,
                 "scan_budget_turns": budget,
                 "solo": solo,
+                "proxy": proxy is not None,
+                "creds": creds_path,
                 "started_at": utc_now_iso(),
                 "vulnem_version": __version__,
             },
@@ -197,6 +242,8 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
         f"Model:  {settings.model}\n"
         f"Mode:   {mode}\n"
         f"Network: {settings.docker_network or '(default — internet reachable)'}\n"
+        f"Proxy:  {proxy.name if proxy else 'disabled'}\n"
+        f"Auth:   {'credentials file → session established pre-scan' if creds else 'unauthenticated'}\n"
         f"Run dir: {run_dir}",
         title="VulnEm scan", border_style="blue",
     ))
@@ -205,11 +252,14 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
         image=settings.sandbox_image,
         user=settings.sandbox_user,
         network=settings.docker_network,
+        proxy_url=proxy.sandbox_proxy_url if proxy else None,
     )
     try:
         sandbox.start()
     except SandboxError as exc:
         console.print(f"[red]Sandbox error:[/red] {exc}")
+        if proxy is not None:
+            proxy.stop()
         return 2
 
     started_at = utc_now_iso()
@@ -217,16 +267,20 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
         result = _aio.run(run_scan(
             scope=scope, settings=settings, sandbox=sandbox, run_dir=run_dir,
             solo=solo, on_event=_on_event, budget_turns=budget,
+            proxy=proxy, creds=creds,
         ))
     finally:
         sandbox.stop()
+        if proxy is not None:
+            proxy.stop()
 
     _write_report(run_dir, settings, scope, started_at, result)
     # CI-friendly exit code: non-zero when findings exist.
     return 1 if result.findings else 0
 
 
-def _run_demo(settings: Settings, *, solo: bool = False, budget: int | None = None) -> int:
+def _run_demo(settings: Settings, *, solo: bool = False, budget: int | None = None,
+              creds_path: str | None = None, no_proxy: bool = False) -> int:
     """Spin up an isolated Juice Shop lab, scan it, tear it down."""
     import docker
 
@@ -265,7 +319,8 @@ def _run_demo(settings: Settings, *, solo: bool = False, budget: int | None = No
         console.print("  target is up. starting scan.\n")
 
         settings.docker_network = net_name
-        return _run_scan(settings, target_url, yes=True, solo=solo, budget=budget)
+        return _run_scan(settings, target_url, yes=True, solo=solo, budget=budget,
+                         creds_path=creds_path, no_proxy=no_proxy)
     except SandboxError as exc:
         console.print(f"[red]Sandbox error:[/red] {exc}")
         return 2
@@ -288,6 +343,9 @@ def _run_resume(settings: Settings, run_dir: Path, *, model: str | None = None,
                 extend_turns: int | None = None) -> int:
     import asyncio as _aio
 
+    from vulnem.auth import CredsConfig, CredsError
+    from vulnem.proxy.manager import ProxyError, ProxyManager
+
     try:
         state = load_resume_state(run_dir)
         config = read_run_config(run_dir)
@@ -309,10 +367,28 @@ def _run_resume(settings: Settings, run_dir: Path, *, model: str | None = None,
         budget["max_turns"] = (budget.get("max_turns") or 0) + extend_turns
         console.print(f"[green]Scan budget extended by {extend_turns} turns.[/green]")
 
+    creds = None
+    if config.get("creds"):
+        try:
+            creds = CredsConfig.load(config["creds"])
+        except CredsError as exc:
+            console.print(f"[yellow]Credentials file no longer loadable "
+                          f"(continuing unauthenticated):[/yellow] {exc}")
+
+    proxy = None
+    if config.get("proxy", False):
+        proxy = ProxyManager(scope=scope, network=settings.docker_network)
+        try:
+            proxy.start()
+        except ProxyError as exc:
+            console.print(f"[red]Proxy sidecar error:[/red] {exc}")
+            return 2
+
     console.print(Panel.fit(
         f"Resuming: [bold]{scope.target_url}[/bold]\n"
         f"Run dir:  {run_dir}\n"
-        f"Model:    {settings.model}",
+        f"Model:    {settings.model}\n"
+        f"Proxy:    {proxy.name if proxy else 'disabled'}",
         title="VulnEm resume", border_style="blue",
     ))
 
@@ -320,21 +396,26 @@ def _run_resume(settings: Settings, run_dir: Path, *, model: str | None = None,
         image=settings.sandbox_image,
         user=settings.sandbox_user,
         network=settings.docker_network,
+        proxy_url=proxy.sandbox_proxy_url if proxy else None,
     )
     try:
         sandbox.start()
     except SandboxError as exc:
         console.print(f"[red]Sandbox error:[/red] {exc} (is the target's network still up?)")
+        if proxy is not None:
+            proxy.stop()
         return 2
 
     try:
         result = _aio.run(run_scan(
             scope=scope, settings=settings, sandbox=sandbox, run_dir=run_dir,
             solo=config.get("solo", False), on_event=_on_event,
-            resume_state=state,
+            resume_state=state, proxy=proxy, creds=creds,
         ))
     finally:
         sandbox.stop()
+        if proxy is not None:
+            proxy.stop()
 
     started_at = config.get("started_at", utc_now_iso())
     _write_report(run_dir, settings, scope, started_at, result)
@@ -359,7 +440,8 @@ def cmd_scan(args: argparse.Namespace) -> int:
     if args.yes:
         settings.yes = True
     return _run_scan(settings, args.target, yes=args.yes,
-                     solo=args.solo, budget=args.budget)
+                     solo=args.solo, budget=args.budget,
+                     creds_path=args.creds, no_proxy=args.no_proxy)
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
@@ -370,7 +452,8 @@ def cmd_demo(args: argparse.Namespace) -> int:
         settings.max_turns = args.max_turns
     if args.max_agents:
         settings.max_agents = args.max_agents
-    return _run_demo(settings, solo=args.solo, budget=args.budget)
+    return _run_demo(settings, solo=args.solo, budget=args.budget,
+                     creds_path=args.creds, no_proxy=args.no_proxy)
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -408,6 +491,14 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         except docker.errors.ImageNotFound:
             ok = False
             console.print("  [yellow]![/yellow] Sandbox image missing — run `vulnem build`")
+        try:
+            from vulnem.proxy.manager import SIDECAR_IMAGE
+
+            client.images.get(SIDECAR_IMAGE)
+            console.print(f"  [green]✓[/green] Proxy sidecar image {SIDECAR_IMAGE} present")
+        except docker.errors.ImageNotFound:
+            console.print("  [yellow]![/yellow] Proxy sidecar image missing — it will be "
+                          "pulled on first use (needs internet once)")
     except Exception as exc:
         ok = False
         console.print(f"  [red]✗[/red] Docker not reachable: {exc}")
@@ -455,6 +546,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("--max-agents", type=int, help="Agent cap for the graph (default 8)")
     p_scan.add_argument("--solo", action="store_true",
                         help="Phase 1 single-agent mode (no coordinator graph)")
+    p_scan.add_argument("--creds", metavar="FILE",
+                        help="Credentials JSON for an authenticated scan (login URL + "
+                             "secrets; values never enter agent prompts)")
+    p_scan.add_argument("--no-proxy", action="store_true",
+                        help="Disable the mitmproxy sidecar (drops network-layer scope "
+                             "enforcement and traffic capture)")
     p_scan.add_argument("--yes", action="store_true",
                         help="Skip authorization confirmation (CI / owned assets)")
     p_scan.set_defaults(func=cmd_scan)
@@ -465,6 +562,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_demo.add_argument("--budget", type=int, help="Scan-wide turn budget")
     p_demo.add_argument("--max-agents", type=int)
     p_demo.add_argument("--solo", action="store_true", help="Phase 1 single-agent mode")
+    p_demo.add_argument("--creds", metavar="FILE",
+                        help="Credentials JSON for an authenticated demo scan")
+    p_demo.add_argument("--no-proxy", action="store_true",
+                        help="Disable the mitmproxy sidecar")
     p_demo.set_defaults(func=cmd_demo)
 
     p_resume = sub.add_parser("resume", help="Resume an interrupted scan from its snapshot")

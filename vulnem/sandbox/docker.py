@@ -4,16 +4,24 @@ The container is built from ``containers/Dockerfile`` (Debian + pentest
 tooling, non-root ``pentester`` user). For lab runs the container is attached
 to an internal Docker network that hosts the target, so the agent physically
 cannot reach anything outside the lab.
+
+Phase 3: the sandbox optionally routes its HTTP traffic through the mitmproxy
+sidecar (``proxy_url``) — exec'd clients that honor http_proxy/https_proxy
+(curl, requests, Go tools, the browser daemon) are captured and scope-checked
+by the proxy's allowlist addon. The internal lab network stays the hard
+backstop for everything that ignores proxy env vars.
 """
 
 from __future__ import annotations
 
+import io
 import logging
 import shlex
+import tarfile
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import docker
 from docker.errors import ImageNotFound, NotFound
@@ -43,13 +51,20 @@ class Sandbox:
         user: str,
         network: str | None = None,
         name_prefix: str = "vulnem-sandbox",
+        proxy_url: str | None = None,
     ) -> None:
         self._image = image
         self._user = user
         self._network = network
+        self._proxy_url = proxy_url
         self._name = f"{name_prefix}-{uuid.uuid4().hex[:8]}"
         self._client: docker.DockerClient | None = None
         self._container = None
+
+    @property
+    def proxy_url(self) -> str | None:
+        """The HTTP proxy every sandbox client is pointed at (or None)."""
+        return self._proxy_url
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -111,10 +126,22 @@ class Sandbox:
             raise SandboxError("Sandbox is not running")
         script = f"timeout -k 5 {max(1, int(timeout))} bash -c {shlex.quote(command)}"
         started = time.monotonic()
+        env = {"HOME": f"/home/{self._user}"}
+        if self._proxy_url:
+            # Route HTTP clients through the mitmproxy sidecar (scope-checked).
+            # Localhost (the browser daemon) is never proxied.
+            env.update({
+                "http_proxy": self._proxy_url,
+                "https_proxy": self._proxy_url,
+                "HTTP_PROXY": self._proxy_url,
+                "HTTPS_PROXY": self._proxy_url,
+                "no_proxy": "localhost,127.0.0.1",
+                "NO_PROXY": "localhost,127.0.0.1",
+            })
         result = self._container.exec_run(
             ["/bin/bash", "-lc", script],
             user=self._user,
-            environment={"HOME": f"/home/{self._user}"},
+            environment=env,
             demux=True,
         )
         duration = time.monotonic() - started
@@ -130,6 +157,32 @@ class Sandbox:
             duration=duration,
         )
 
+    # -- file transfer ------------------------------------------------------
+
+    def put_file(self, data: bytes, container_path: str) -> None:
+        """Write bytes to an absolute path inside the sandbox container."""
+        if self._container is None:
+            raise SandboxError("Sandbox is not running")
+        path = PurePosixPath(container_path)  # container paths are always POSIX
+        tar_bytes = _tar_member(path.name, data)
+        ok = self._container.put_archive(str(path.parent), tar_bytes)
+        if not ok:
+            raise SandboxError(f"put_archive failed for {container_path}")
+
+    def get_file(self, container_path: str) -> bytes:
+        """Read a file's bytes out of the sandbox container."""
+        if self._container is None:
+            raise SandboxError("Sandbox is not running")
+        stream, _stat = self._container.get_archive(container_path)
+        data = b"".join(chunk for chunk in stream if isinstance(chunk, bytes))
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            for member in tar.getmembers():
+                if member.isfile():
+                    fh = tar.extractfile(member)
+                    if fh is not None:
+                        return fh.read()
+        raise SandboxError(f"{container_path} is not a regular file in the sandbox")
+
     # -- helpers -----------------------------------------------------------
 
     def wait_for_http(self, url: str, *, attempts: int = 60, delay: float = 2.0) -> bool:
@@ -141,6 +194,18 @@ class Sandbox:
             if attempt < attempts - 1:
                 time.sleep(delay)
         return False
+
+
+def _tar_member(name: str, data: bytes) -> bytes:
+    """Build a one-member tar archive in memory (for put_archive)."""
+    info = tarfile.TarInfo(name=name)
+    info.size = len(data)
+    info.mode = 0o644
+    info.mtime = int(time.time())
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
 
 
 def build_image(*, dockerfile_dir: Path, tag: str) -> None:

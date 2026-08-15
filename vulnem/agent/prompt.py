@@ -12,7 +12,23 @@ sudo. Available tooling includes: curl, whatweb, nikto, nmap, sqlmap (--batch),
 nuclei, ffuf, httpx, katana, python3, jq, dig, nc, and standard shell utilities.
 You reach the target over a Docker network by its hostname.
 Write scratch files under /tmp or your home directory.
+You also control a headless-Chromium browser (browser_* tools) with your own
+stateful session (cookies and localStorage persist between your calls), and
+a traffic-capturing proxy (list_requests, view_request, repeat_request,
+view_sitemap) that recorded every request the scan sent — yours included.
+All HTTP traffic goes through the scope-enforcing proxy: keep the proxy env
+vars intact (they are preconfigured); never unset http_proxy.
 </environment>"""
+
+_AUTH_BLOCK = """<authenticated_session>
+An AUTHENTICATED session has already been established for you by the operator:
+your browser session is pre-seeded with the cookies, and curl can reuse them
+with `-b /home/pentester/cookies.txt`. You never see the credentials and you
+must NOT attempt to log in, register, or reset the account — just use the
+session. Evidence that requires showing you are authenticated (e.g. an
+authenticated page rendering) should be captured via the browser tools.
+</authenticated_session>
+"""
 
 _METHODOLOGY_BLOCK = """<methodology>
 Work like a professional pentester, in phases. Do not skip phases.
@@ -57,6 +73,12 @@ _TESTING_RULES_BLOCK = """<rules>
   rapid-fire requests) can knock it over and waste everyone's budget. Prefer
   precise, low-volume probes; if the target stops answering, wait a few
   seconds and retry gently instead of hammering it.
+- BROWSER vs CURL: use curl/exec for APIs, quick probes, and anything you need
+  in raw form; use the browser_* tools when JavaScript must render (SPAs), for
+  DOM/stored XSS execution proof (recorded dialogs ARE execution evidence),
+  and for screenshots as finding evidence. The proxy tools complement both:
+  after activity, list_requests/view_sitemap show exactly what was exchanged,
+  and repeat_request replays a captured request with modifications.
 - Budget your turns: you get at most {max_turns} turns for your whole mission.
 - Never fabricate evidence. If you could not validate something, either say so
   in your finish report or report it with confidence "low".
@@ -77,7 +99,7 @@ resolve, or attack it.
 </authorization>
 
 {environment}
-{methodology}
+{auth_block}{methodology}
 <rules>
 {testing_rules}
 - Every turn MUST end with exactly one tool call. Plain text alone does not end
@@ -105,7 +127,7 @@ cover the rest.
 </authorization>
 
 {environment}
-{methodology}
+{auth_block}{methodology}
 <rules>
 {testing_rules}
 - Every turn MUST end with exactly one tool call. Plain text alone does not end
@@ -177,11 +199,13 @@ scope and it is enforced in code. Never expand it.
 """
 
 
-def build_system_prompt(scope: Scope, *, max_turns: int) -> str:
+def build_system_prompt(scope: Scope, *, max_turns: int,
+                        authenticated: bool = False) -> str:
     """Solo tester prompt (Phase 1 behavior)."""
     return SYSTEM_PROMPT_TEMPLATE.format(
         scope_block=scope.describe_for_prompt(),
         environment=_ENVIRONMENT_BLOCK,
+        auth_block=_AUTH_BLOCK if authenticated else "",
         methodology=_METHODOLOGY_BLOCK,
         testing_rules=_TESTING_RULES_BLOCK.format(max_turns=max_turns),
         max_turns=max_turns,
@@ -189,7 +213,8 @@ def build_system_prompt(scope: Scope, *, max_turns: int) -> str:
 
 
 def build_specialist_prompt(
-    scope: Scope, *, name: str, objective: str, parent_name: str, max_turns: int
+    scope: Scope, *, name: str, objective: str, parent_name: str, max_turns: int,
+    authenticated: bool = False,
 ) -> str:
     return SPECIALIST_PROMPT_TEMPLATE.format(
         name=name,
@@ -197,6 +222,7 @@ def build_specialist_prompt(
         objective=objective,
         scope_block=scope.describe_for_prompt(),
         environment=_ENVIRONMENT_BLOCK,
+        auth_block=_AUTH_BLOCK if authenticated else "",
         methodology=_METHODOLOGY_BLOCK,
         testing_rules=_TESTING_RULES_BLOCK.format(max_turns=max_turns),
         max_turns=max_turns,
@@ -215,13 +241,20 @@ def build_root_prompt(
     )
 
 
-def build_initial_task(scope: Scope) -> str:
-    return (
+def build_initial_task(scope: Scope, *, authenticated: bool = False) -> str:
+    task = (
         f"Begin an authorized security assessment of {scope.target_url}.\n"
         "Start with recon and mapping, read the `recon` skill, then test the "
         "highest-value surfaces, validate findings with reproduced evidence, "
         "report them with report_finding, and finish with finish_scan."
     )
+    if authenticated:
+        task += (
+            "\nAn authenticated session is already established (browser context "
+            "pre-seeded; curl: `-b /home/pentester/cookies.txt`). Use it — do not "
+            "log in again."
+        )
+    return task
 
 
 def build_root_initial_task(scope: Scope) -> str:
