@@ -33,6 +33,12 @@ class Finding(BaseModel):
     confidence: str = Field(default="high", pattern="^(high|medium|low)$")
     url: str | None = None
     reported_by: str = Field(default="", description="Agent that filed the finding")
+    file: str | None = Field(default=None,
+                             description="Source file (white-box mode), e.g. app.py")
+    line: int | None = Field(default=None, ge=1,
+                             description="Line in `file` where the flaw lives")
+    fix_patch: str | None = Field(default=None,
+                                  description="Unified diff fixing the finding")
 
     def sort_key(self) -> tuple[int, str]:
         return (SEVERITY_ORDER.get(self.severity, 99), self.title.lower())
@@ -96,12 +102,17 @@ class FindingsReport(BaseModel):
                 meta.append(f"- CWE: {f.cwe}")
             if f.url:
                 meta.append(f"- URL: {f.url}")
+            if f.file:
+                meta.append(f"- File: {f.file}" + (f":{f.line}" if f.line else ""))
             if f.reported_by:
                 meta.append(f"- Reported by: {f.reported_by}")
             lines += [*meta, "", "### Description", "", f.description, ""]
             lines += ["### Proof of Concept", "", "```", f.poc.strip(), "```", ""]
             lines += ["### Evidence", "", "```", f.evidence.strip(), "```", ""]
-            lines += ["### Remediation", "", f.remediation.strip(), "", "---", ""]
+            lines += ["### Remediation", "", f.remediation.strip()]
+            if f.fix_patch and f.fix_patch.strip():
+                lines += ["", "### Fix Patch", "", "```diff", f.fix_patch.strip(), "```"]
+            lines += ["", "---", ""]
         return "\n".join(lines)
 
 

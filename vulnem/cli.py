@@ -166,13 +166,51 @@ def _write_report(run_dir: Path, settings: Settings, scope: Scope,
         findings=result.findings,
     )
     report.write(run_dir)
+    _export_machine_reports(run_dir, report)
     counts = report.counts()
     parts = [f"{sev}: {n}" for sev, n in counts.items() if n]
     console.print("\n[bold]Findings:[/bold] " + (", ".join(parts) if parts else "none"))
     console.print(f"Report:     {run_dir / 'report.md'}")
     console.print(f"Findings:   {run_dir / 'findings.json'}")
+    console.print(f"SARIF:      {run_dir / 'findings.sarif'}")
+    console.print(f"PDF:        {run_dir / 'report.pdf'}")
     console.print(f"Transcript: {run_dir / 'transcript.jsonl'}")
     return report
+
+
+def _export_machine_reports(run_dir: Path, report: FindingsReport | None = None) -> None:
+    """Write findings.sarif + report.pdf for a run dir (idempotent)."""
+    from vulnem.report.findings import findings_from_json
+    from vulnem.report.pdf import report_to_pdf
+    from vulnem.report.sarif import write_sarif
+
+    if report is None:
+        report = findings_from_json(run_dir / "findings.json")
+    write_sarif(report, run_dir)
+    report_to_pdf(report, run_dir / "report.pdf")
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    run_dir = Path(args.run_dir).resolve()
+    if not (run_dir / "findings.json").is_file():
+        console.print(f"[red]No findings.json in {run_dir}[/red] "
+                      "(expected a completed runs/<id> directory)")
+        return 2
+    try:
+        _export_machine_reports(run_dir)
+    except Exception as exc:
+        console.print(f"[red]Report export failed:[/red] {exc}")
+        return 2
+    from vulnem.report.findings import findings_from_json
+
+    report = findings_from_json(run_dir / "findings.json")
+    counts = report.counts()
+    parts = [f"{sev}: {n}" for sev, n in counts.items() if n]
+    console.print(f"Re-exported for [bold]{report.target}[/bold] — findings: "
+                  + (", ".join(parts) if parts else "none"))
+    console.print(f"  {run_dir / 'findings.sarif'}")
+    console.print(f"  {run_dir / 'report.pdf'}")
+    return 0
 
 
 def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
@@ -587,6 +625,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume.add_argument("--extend-turns", type=int,
                           help="Top up the scan-wide turn budget before resuming")
     p_resume.set_defaults(func=cmd_resume)
+
+    p_report = sub.add_parser(
+        "report", help="Re-export SARIF + PDF for a completed run")
+    p_report.add_argument("run_dir", help="Run directory (e.g. runs/20260816-...-juice-shop-ab12)")
+    p_report.set_defaults(func=cmd_report)
 
     p_tui = sub.add_parser("tui", help="Replay/watch a run: agent graph, tool stream, findings")
     p_tui.add_argument("run_dir", help="Run directory (e.g. runs/20260816-...-juice-shop-ab12)")
