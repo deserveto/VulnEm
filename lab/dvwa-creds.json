@@ -1,0 +1,14 @@
+{
+  "_comment": "Authenticated DVWA scan via browser form login (admin/password are DVWA's public defaults). The setup step initializes DVWA's database before logging in - both run on the host, before any agent. Use with `vulnem scan http://dvwa --network <net> --creds lab/dvwa-creds.json`.",
+  "login_url": "http://dvwa/login.php",
+  "method": "browser",
+  "username": "admin",
+  "password": "password",
+  "username_selector": "input[name=username]",
+  "password_selector": "input[name=password]",
+  "submit_selector": "input[name=Login]",
+  "setup": {
+    "url": "http://dvwa/setup.php",
+    "click": "input[name=create_db]"
+  }
+}

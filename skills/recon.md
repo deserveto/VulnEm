@@ -36,6 +36,12 @@ curl -s <target>/openapi.json | head -100
 curl -s <target>/swagger.json | head -100
 ```
 
+The proxy observed everything the scan sent: `view_sitemap` gives you the
+consolidated host→path→method→status map of actual traffic (crawl results
+plus every request any agent made) — cross-check katana/ffuf finds against
+it. For JS-rendered SPAs, `browser_navigate <target>` + `browser_read_page`
+exposes post-render links and forms curl will never see.
+
 ## Phase 3 — Inventory and prioritize
 
 Consolidate into `/tmp/endpoints.txt` (method + path + params + auth required?).

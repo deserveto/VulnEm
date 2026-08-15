@@ -33,22 +33,37 @@ request, watch what survives in the response.
 ## 3. Confirm executable context
 
 A finding requires the payload landing in the page UNESCAPED in a spot the
-browser executes. Evidence must show:
+browser executes. Two levels of proof:
 
-1. The request with the payload.
-2. The response line where the payload appears raw (`grep -n` output).
-3. If DOM-based (sink in JS, e.g. `innerHTML = location.hash`), show the
-   source line from fetched JS proving the sink, and give the victim URL
-   (`<target>/#/<img src=x onerror=alert(1)>`).
+1. Reflection (curl is fine):
+   - the request with the payload,
+   - the response line where the payload appears raw (`grep -n` output).
+2. Execution (browser — this is what makes it a solid finding):
+   - payload with an observable effect (`<img src=x onerror=window.__xss=1>`
+     or `alert(document.domain)`),
+   - `browser_navigate` to the reflecting URL, then `browser_read_page`
+     (recorded `dialogs` entry) or `browser_evaluate` `window.__xss` → 1,
+   - `browser_screenshot` as visual evidence, and `view_request` on the
+     captured exchange from the proxy.
 
-Use `curl -s <url> | grep -n -C2 'onerror\|alert'` to capture evidence.
+For DOM-based XSS (sink in JS, e.g. `innerHTML = location.hash`), curl shows
+nothing — show the source line proving the sink (fetch the JS), give the
+victim URL, and prove execution with the browser exactly as above. Read the
+`browser_testing` skill for the full workflow.
 
 ## 4. Stored XSS
 
 Find inputs that persist and render later (profile fields, feedback/comments):
 
-1. Post payload: `curl -s -X POST <target>/api/Feedback -H 'Content-Type: application/json' -d '{"comment":"<img src=x onerror=alert(1)>","rating":5}'`
-2. Fetch the page/API that renders it back and grep for the raw payload.
+1. Post payload — via the app's own form (`browser_fill` + `browser_click`)
+   or the API behind it (find it in `view_sitemap`):
+   `curl -s -X POST <target>/api/Feedback -H 'Content-Type: application/json' -d '{"comment":"<img src=x onerror=alert(1)>","rating":5}'`
+   (add `-b /home/pentester/cookies.txt` on authenticated scans).
+2. Render it back with `browser_navigate` on the page that displays it —
+   an SPA usually needs the browser to actually execute the render.
+3. Prove execution (`browser_read_page` dialogs / `browser_evaluate`
+   marker) and `browser_screenshot` the result. Reference the proxy-captured
+   request id (`view_request`) in the evidence.
 
 ## Severity guide
 

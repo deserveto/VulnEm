@@ -1,0 +1,10 @@
+{
+  "_comment": "Authenticated Juice Shop scan via the REST login (default demo admin; public knowledge). The host performs this login before any agent runs - secrets never enter prompts. Use with `vulnem scan http://juice-shop:3000 --network <net> --creds lab/juice-shop-creds.json`.",
+  "login_url": "http://juice-shop:3000/#/login",
+  "method": "api",
+  "api": {
+    "method": "POST",
+    "url": "http://juice-shop:3000/rest/user/login",
+    "json": { "email": "admin@juice-sh.op", "password": "admin123" }
+  }
+}

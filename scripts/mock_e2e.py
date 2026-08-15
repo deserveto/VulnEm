@@ -1,14 +1,19 @@
 """Multi-agent end-to-end plumbing test with a scripted fake LLM.
 
 Runs the FULL stack — demo lab (Juice Shop on an internal network), real
-sandbox container, coordinator graph, agent sessions, graph tools, dedupe,
+sandbox container (with Playwright Chromium), mitmproxy sidecar with the
+scope-guard addon, coordinator graph, agent sessions, graph tools, dedupe,
 report writing — with litellm.completion replaced by a canned per-agent
-script. Proves everything except the paid model call works.
+script. Proves everything except the paid model call works, WITHOUT an LLM
+API key.
 
-The scripted root spawns THREE specialists in parallel (the Phase 2 demo
-shape): recon, sqli-search, and access-control. Two of them deliberately
-report the same endpoint+class finding so cross-agent dedupe must collapse
-them in the final report.
+The scripted root spawns FOUR specialists in parallel: recon, sqli-search,
+access-control, and xss-browser. The browser specialist drives the REAL
+headless Chromium through the browser tools and inspects the REAL proxy log
+with the proxy tools, so the Phase 3 plumbing (daemon bring-up, per-agent
+contexts, screenshot artifacts, flow capture via the sidecar) is exercised
+end to end. Two agents deliberately report the same endpoint+class finding
+so cross-agent dedupe must collapse them in the final report.
 
 Usage:  .venv/Scripts/python scripts/mock_e2e.py
 Exit codes: 0 = plumbing verified, 2 = verification failed.
@@ -42,14 +47,28 @@ ROOT_SCRIPT = [
     ("", "create_agent", {"name": "access-probe", "objective":
         "Test broken access control on {TARGET} admin/API routes. Read "
         "`broken_access_control` first. Finish with agent_finish."}),
-    # A completion-report message can wake the root early — wait again so
-    # every specialist is terminal before the graph view + finish.
+    ("", "create_agent", {"name": "xss-browser", "objective":
+        "Exercise the browser tooling against {TARGET}: read "
+        "`browser_testing`, navigate the home page, read it back, screenshot "
+        "it, then inspect and replay a captured request via the proxy tools. "
+        "File one mock finding citing the screenshot artifact. Finish with "
+        "agent_finish."}),
+    # Completion-report messages wake the root early — each wait returns on
+    # one wake, so keep waiting until every specialist is terminal (the
+    # scripted stand-in for a real root reacting to wait results).
+    ("", "wait_for_agents", {}),
+    ("", "wait_for_agents", {}),
+    ("", "wait_for_agents", {}),
+    ("", "wait_for_agents", {}),
+    ("", "wait_for_agents", {}),
+    ("", "wait_for_agents", {}),
     ("", "wait_for_agents", {}),
     ("", "wait_for_agents", {}),
     ("", "view_agent_graph", {}),
     ("Scan complete.", "finish_scan", {"summary":
-        "Mock E2E multi-agent scan: three specialists ran in parallel; "
-        "overlapping findings were merged; plumbing verified end to end."}),
+        "Mock E2E multi-agent scan: four specialists ran in parallel "
+        "(including a browser-driven one); overlapping findings were merged; "
+        "browser + proxy plumbing verified end to end."}),
 ]
 
 RECON_SCRIPT = [
@@ -62,7 +81,7 @@ RECON_SCRIPT = [
 SQLI_SCRIPT = [
     ("", "read_skill", {"name": "sql_injection"}),
     ("Probing search.", "exec_command",
-     {"command": "curl -s {TARGET}/rest/products/search?q=orange' | head -c 300"}),
+     {"command": "curl -s '{TARGET}/rest/products/search?q=orange' | head -c 300"}),
     ("Filing the finding.", "report_finding", {
         "title": "SQL injection in product search (mock e2e)",
         "severity": "high",
@@ -100,11 +119,42 @@ ACCESS_SCRIPT = [
         "summary": "FTP route checked; overlapping finding filed for dedupe."}),
 ]
 
+# Drives the real Chromium daemon + real proxy sidecar. Flow id 1 is the
+# first proxied request (recon's GET /), guaranteed to exist by ordering.
+BROWSER_SCRIPT = [
+    ("", "read_skill", {"name": "browser_testing"}),
+    ("Loading the SPA in headless Chromium.", "browser_navigate", {"url": "{TARGET}"}),
+    ("Reading the rendered DOM back.", "browser_read_page", {}),
+    ("Capturing visual evidence.", "browser_screenshot", {"name": "mock-e2e-home"}),
+    ("Inspecting the proxy log.", "list_requests", {"q": "juice-shop", "limit": 10}),
+    ("Viewing the first captured exchange.", "view_request", {"id": 1}),
+    ("Replaying it through the proxy.", "repeat_request", {"id": 1}),
+    ("Mapping everything the proxy saw.", "view_sitemap", {}),
+    ("Filing the mock browser finding.", "report_finding", {
+        "title": "Browser-rendered reflected marker on home page (mock e2e)",
+        "severity": "low",
+        "cwe": "CWE-79",
+        "url": "{TARGET}/",
+        "description": "Mock finding produced by the browser specialist to "
+                       "verify Phase 3 browser + proxy plumbing end to end.",
+        "evidence": "browser_read_page output of {TARGET} plus screenshot "
+                    "artifact artifacts/xss-browser/ referenced in the "
+                    "transcript; proxy flow log in proxy-flows.jsonl.",
+        "poc": "browser_navigate {TARGET} then browser_read_page",
+        "remediation": "Ignore - plumbing test artifact.",
+        "confidence": "high",
+    }),
+    ("Done.", "agent_finish", {"status": "completed",
+        "summary": "Browser navigated, screenshotted, proxy log inspected "
+                   "and one request replayed through the sidecar."}),
+]
+
 SCRIPTS_BY_AGENT = {
     "root": ROOT_SCRIPT,
     "recon-mapper": RECON_SCRIPT,
     "sqli-search": SQLI_SCRIPT,
     "access-probe": ACCESS_SCRIPT,
+    "xss-browser": BROWSER_SCRIPT,
 }
 
 
@@ -165,11 +215,11 @@ class ScriptedGraphLLM:
 
 
 def _verify(run_dir: Path) -> list[str]:
-    """Assert the multi-agent plumbing produced what Phase 2 promises."""
+    """Assert the multi-agent plumbing produced what Phase 2 + 3 promise."""
     problems: list[str] = []
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     agents = {a["name"]: a for a in state["agents"]}
-    expected = {"root", "recon-mapper", "sqli-search", "access-probe"}
+    expected = {"root", "recon-mapper", "sqli-search", "access-probe", "xss-browser"}
     if set(agents) != expected:
         problems.append(f"agents in snapshot: {sorted(agents)} != {sorted(expected)}")
     for name in expected - {"root"}:
@@ -197,6 +247,44 @@ def _verify(run_dir: Path) -> list[str]:
     for want in ("agent_created", "agent_status", "message_delivered", "tool_call"):
         if want not in kinds:
             problems.append(f"transcript missing {want} events")
+
+    # -- Phase 3: browser + proxy plumbing --------------------------------
+    for want_tool in ("browser_navigate", "browser_read_page", "browser_screenshot",
+                      "list_requests", "view_request", "repeat_request", "view_sitemap"):
+        calls = [e for e in transcript if e["type"] == "tool_call" and e.get("name") == want_tool]
+        if not calls:
+            problems.append(f"no {want_tool} call in transcript")
+        elif calls[0].get("agent_ctx", {}).get("name") != "xss-browser":
+            problems.append(f"{want_tool} not attributed to xss-browser")
+
+    browser_results = [e for e in transcript if e["type"] == "tool_result"
+                       and e.get("name") == "browser_navigate"]
+    if not browser_results or '"ok": true' not in (browser_results[0].get("result") or ""):
+        problems.append("browser_navigate did not succeed against the real target")
+
+    shots = [e for e in transcript if e["type"] == "screenshot"]
+    if not shots:
+        problems.append("no screenshot evidence event in transcript")
+    else:
+        artifact = run_dir / shots[0].get("artifact", "")
+        if not artifact.is_file() or artifact.stat().st_size < 1000:
+            problems.append(f"screenshot artifact missing/empty: {shots[0].get('artifact')}")
+
+    if "proxy_started" not in kinds:
+        problems.append("no proxy_started event (sidecar lifecycle not wired)")
+    flows = [e for e in transcript if e["type"] == "proxy_flow"]
+    if len(flows) < 3:
+        problems.append(f"only {len(flows)} proxy_flow events (want >= 3 captured exchanges)")
+    if not any("/rest/products/search" in (e.get("path") or "") for e in flows):
+        problems.append("proxy log missing the search-API exchange (flow capture gap)")
+    repeat_results = [e for e in transcript if e["type"] == "tool_result"
+                      and e.get("name") == "repeat_request"]
+    if not repeat_results or '"ok": true' not in (repeat_results[0].get("result") or ""):
+        problems.append("repeat_request did not replay through the proxy")
+    evidence_log = run_dir / "proxy-flows.jsonl"
+    if not evidence_log.is_file() or len(evidence_log.read_text(encoding="utf-8").splitlines()) < 3:
+        problems.append("proxy-flows.jsonl evidence snapshot missing or thin")
+
     attributed = {e["agent_ctx"]["name"] for e in transcript if e["type"] == "tool_call"
                   and "agent_ctx" in e}
     if not {"root", "sqli-search"} <= attributed:
@@ -239,10 +327,12 @@ def main() -> int:
         for p in problems or [f"demo exit code {rc}"]:
             console.print(f"  [red]FAIL[/red] {p}")
         return 2
-    console.print("  [green]PASS[/green] root spawned 3 specialists in parallel")
+    console.print("  [green]PASS[/green] root spawned 4 specialists in parallel (incl. browser-driven)")
     console.print("  [green]PASS[/green] all specialists completed + filed reports")
     console.print("  [green]PASS[/green] overlapping findings deduped with merged attribution")
     console.print("  [green]PASS[/green] transcript carries per-agent attribution")
+    console.print("  [green]PASS[/green] real Chromium driven via browser tools; screenshot artifact persisted")
+    console.print("  [green]PASS[/green] proxy sidecar captured flows, enabled replay, snapshot saved")
     console.print(f"  run dir: {run_dirs[-1]}")
     return 0
 

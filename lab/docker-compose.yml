@@ -3,7 +3,11 @@
 #
 #   docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
 #   vulnem scan http://juice-shop:3000 --network vulnem-lab_labnet
+#   vulnem scan http://dvwa --network vulnem-lab_labnet --creds lab/dvwa-creds.json
 #   docker compose -p vulnem-lab -f lab/docker-compose.yml down
+#
+# Two stacks on purpose: Juice Shop (Node/Angular) and DVWA (PHP) prove the
+# skills and tools generalize across technology stacks.
 
 services:
   juice-shop:
@@ -12,6 +16,14 @@ services:
     # while the sandbox attaches to the internal lab network only.
     ports:
       - "3000:3000"
+    networks: [default, labnet]
+
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    # Browsable from the host at http://localhost:4280 (first visit: click
+    # "Create / Reset Database"; login admin/password).
+    ports:
+      - "127.0.0.1:4280:80"
     networks: [default, labnet]
 
 networks:
