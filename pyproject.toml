@@ -20,6 +20,8 @@ dependencies = [
   "docker>=7.1",
   "rich>=13.7",
   "requests>=2.32",
+  "textual>=0.60",
+  "reportlab>=4.0",
 ]
 
 [project.optional-dependencies]

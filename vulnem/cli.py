@@ -462,6 +462,19 @@ def cmd_resume(args: argparse.Namespace) -> int:
                        model=args.model, extend_turns=args.extend_turns)
 
 
+def cmd_tui(args: argparse.Namespace) -> int:
+    from vulnem.ui.tui import run_tui
+
+    run_dir = Path(args.run_dir).resolve()
+    if not (run_dir / "transcript.jsonl").is_file():
+        console.print(f"[red]No transcript.jsonl in {run_dir}[/red] "
+                      "(expected a runs/<id> directory)")
+        return 2
+    with contextlib.suppress(KeyboardInterrupt):
+        run_tui(run_dir, speed=args.speed, follow=args.follow)
+    return 0
+
+
 def cmd_skills(_args: argparse.Namespace) -> int:
     settings = _resolve_paths(Settings.load(project_root=PROJECT_ROOT))
     packs = _list_skills(settings.skills_dir)
@@ -574,6 +587,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_resume.add_argument("--extend-turns", type=int,
                           help="Top up the scan-wide turn budget before resuming")
     p_resume.set_defaults(func=cmd_resume)
+
+    p_tui = sub.add_parser("tui", help="Replay/watch a run: agent graph, tool stream, findings")
+    p_tui.add_argument("run_dir", help="Run directory (e.g. runs/20260816-...-juice-shop-ab12)")
+    p_tui.add_argument("--speed", type=int, default=None,
+                       help="Replay speed in events/sec (0 = instant; default: auto)")
+    p_tui.add_argument("--follow", action="store_true",
+                       help="Keep tailing the transcript after catch-up (live scan)")
+    p_tui.set_defaults(func=cmd_tui)
 
     p_skills = sub.add_parser("skills", help="List skill packs")
     p_skills.set_defaults(func=cmd_skills)
