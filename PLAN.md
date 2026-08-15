@@ -107,8 +107,19 @@ What exists now (on top of Phase 1):
 - Phase 1 behavior preserved: `vulnem scan --solo` runs the single-agent
   mode on the same engine.
 
-Pending: a real-LLM `vulnem demo` to compare cost/quality vs the Phase 1
-runs (needs an API key) — the exit criterion for closing Phase 2 fully.
+Pending: ~~a real-LLM `vulnem demo`~~ — done 2026-08-16 (`runs/20260815-181256-...`,
+budget 150 turns / 3.1M tokens): root parked in `wait_for_agents` while 5
+specialists ran in parallel; 2 failed mid-run (turn caps + a fragile target)
+and their alerts flowed to root, which respawned/finished cleanly; final
+report: critical SQLi (manual boolean-based confirmation + CVSS 7.5),
+medium CORS, low missing-CSP — per-finding quality strictly above Phase 1
+(CVSS + attribution + merged-evidence schema), count within Phase 1's
+0–11 real-run variance. Cross-agent dedupe exercised by the mock e2e +
+tests (this run's specialists covered disjoint classes). Follow-ups for
+the next tuning pass: child turn caps proved tight for verbose models
+(several specialists hit 30 while still exploring), and one agent's
+aggressive probing briefly knocked Juice Shop over — worth a
+non-destructive reminder in the specialist prompt.
 
 ## Phase 3 — Browser + proxy (web-app pentester, not just "agent with nmap")
 

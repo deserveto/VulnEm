@@ -53,6 +53,10 @@ _TESTING_RULES_BLOCK = """<rules>
   you already found, not opening new attack classes.
 - If a command fails or output is truncated, adapt (narrow the command, write
   output to a file and grep it) instead of repeating it verbatim.
+- The target is fragile: aggressive scanning (huge wordlists, heavy fuzzing,
+  rapid-fire requests) can knock it over and waste everyone's budget. Prefer
+  precise, low-volume probes; if the target stops answering, wait a few
+  seconds and retry gently instead of hammering it.
 - Budget your turns: you get at most {max_turns} turns for your whole mission.
 - Never fabricate evidence. If you could not validate something, either say so
   in your finish report or report it with confidence "low".

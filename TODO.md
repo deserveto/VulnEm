@@ -59,10 +59,13 @@ Transcript:
 - [x] Per-agent attribution in `transcript.jsonl` (agent_ctx, parent_id,
       status transitions) — everything the future UI needs
 
-Definition of done: mock e2e (no LLM key) proves root spawns 3 specialists
-in parallel, dedupes overlapping findings, report ≥ Phase 1 format. Real-run
-validation (`vulnem demo` with a paid model): pending an API key — run it
-and compare cost/quality against the Phase 1 runs in `runs/`.
+Definition of done: MET (2026-08-16). Mock e2e (no LLM key) proves root
+spawns 3 specialists in parallel, dedupes overlapping findings, report ≥
+Phase 1 format. Real run (`runs/20260815-181256-...`, 150-turn budget):
+root spawned 5 specialists in parallel, parked in wait_for_agents, handled
+2 mid-run failures, and reported a validated critical SQLi (+CORS/CSP)
+with CVSS + attribution. Tuning notes for Phase 3: child turn caps tight
+for verbose models; fragile-target probing reminder needed.
 
 ## Phase 3 — Browser + proxy ← CURRENT
 
