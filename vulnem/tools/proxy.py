@@ -154,6 +154,8 @@ def _tool_repeat_request(ctx, args: dict[str, Any]) -> str:
         parts.append(f"-H {shlex.quote(f'{name}: {value}')}")
     if ctx.auth_cookies:
         parts.append("-b /home/pentester/cookies.txt")
+    if getattr(ctx, "auth_bearer", False):
+        parts.append("-H @/home/pentester/.vulnem/auth-header.txt")
     body = str(mods.get("body") if "body" in mods else _b64_to_text(rec.get("req_body") or "", cap=64_000))
     if body:
         try:

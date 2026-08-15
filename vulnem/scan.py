@@ -141,6 +141,9 @@ async def run_scan(
     # -- Phase 3 plumbing: proxy sidecar + authenticated session ----------------
     poll_task: asyncio.Task | None = None
     auth_cookies: list[dict[str, Any]] = []
+    auth_storage: list[dict[str, str]] = []
+    auth_origin = ""
+    auth_bearer = False
     if proxy is not None:
         proxy.bind(coordinator, run_dir)
         poll_task = asyncio.create_task(proxy.poll_loop(), name="proxy-poller")
@@ -161,6 +164,14 @@ async def run_scan(
                           "login_url": creds.login_url})
         if result_auth.ok:
             auth_cookies = result_auth.cookies
+            auth_storage = list(result_auth.storage)
+            # Token-auth apps: also seed the SPA's localStorage if configured.
+            storage_key = (creds.api or {}).get("token_storage_key")
+            if result_auth.bearer and storage_key:
+                auth_storage = [s for s in auth_storage if s.get("key") != storage_key]
+                auth_storage.append({"key": str(storage_key), "value": result_auth.bearer})
+            auth_origin = result_auth.origin
+            auth_bearer = bool(result_auth.bearer)
             await asyncio.to_thread(stage_session, sandbox, result_auth)
 
     coordinator.emit({
@@ -195,6 +206,9 @@ async def run_scan(
             restored_messages=restored,
             proxy=proxy,
             auth_cookies=auth_cookies,
+            auth_storage=auth_storage,
+            auth_origin=auth_origin,
+            auth_bearer=auth_bearer,
             run_dir=run_dir,
         )
 

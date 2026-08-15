@@ -280,6 +280,9 @@ async def _tool_create_agent(sess: AgentSession, args: dict[str, Any]) -> str:
         exec_semaphore=sess.shared_exec_semaphore(),
         proxy=sess.ctx.proxy,
         auth_cookies=sess.ctx.auth_cookies,
+        auth_storage=sess.ctx.auth_storage,
+        auth_origin=sess.ctx.auth_origin,
+        auth_bearer=sess.ctx.auth_bearer,
         run_dir=sess.ctx.run_dir,
     )
     coordinator.emit({

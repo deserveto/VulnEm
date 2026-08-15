@@ -153,18 +153,28 @@ def daemon_op(sandbox, op: dict, *, proxy_url: str | None = None,
         }
 
 
-def _seed_auth_cookies(ctx, agent: str) -> None:
-    """Inject the scan's authenticated session into a fresh agent context."""
+def _seed_auth_session(ctx, agent: str) -> None:
+    """Inject the scan's authenticated session into a fresh agent context:
+    cookies via add_cookies, localStorage via set_storage (navigating to the
+    login origin first so the entries land on the right origin)."""
     cookies = list(getattr(ctx, "auth_cookies", None) or [])
-    if not cookies:
+    storage = list(getattr(ctx, "auth_storage", None) or [])
+    if not cookies and not storage:
         return
     key = (id(ctx.sandbox), agent)
     with _lock:
         if key in _seeded_agents:
             return
         _seeded_agents.add(key)
-    daemon_op(ctx.sandbox, {"agent": agent, "op": "set_cookies", "cookies": cookies},
-              proxy_url=getattr(ctx, "sandbox_proxy_url", None))
+    if cookies:
+        daemon_op(ctx.sandbox, {"agent": agent, "op": "set_cookies", "cookies": cookies},
+                  proxy_url=getattr(ctx, "sandbox_proxy_url", None))
+    if storage:
+        daemon_op(ctx.sandbox,
+                  {"agent": agent, "op": "set_storage",
+                   "origin": getattr(ctx, "auth_origin", "") or "",
+                   "entries": storage},
+                  proxy_url=getattr(ctx, "sandbox_proxy_url", None))
 
 
 def _browser_op(ctx, op: dict, timeout_s: int = 90) -> str:
@@ -172,7 +182,7 @@ def _browser_op(ctx, op: dict, timeout_s: int = 90) -> str:
     error = ensure_daemon(ctx.sandbox, getattr(ctx, "sandbox_proxy_url", None))
     if error:
         return json.dumps({"ok": False, "error": error})
-    _seed_auth_cookies(ctx, agent)
+    _seed_auth_session(ctx, agent)
     result = daemon_op(ctx.sandbox, {"agent": agent, **op}, timeout_s=timeout_s)
     return json.dumps(result, ensure_ascii=False)
 

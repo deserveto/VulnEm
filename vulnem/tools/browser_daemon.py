@@ -165,6 +165,24 @@ class BrowserSessions:
         if op == "get_cookies":
             return {"ok": True, "cookies": session["context"].cookies()}
 
+        if op == "get_storage":
+            storage = page.evaluate("() => Object.assign({}, localStorage)")
+            return {"ok": True,
+                    "storage": [{"key": k, "value": str(v)[:4000]}
+                                for k, v in (storage or {}).items()]}
+
+        if op == "set_storage":
+            origin = str(req.get("origin") or "")
+            entries = req.get("entries") or []
+            if origin and page.url.split("/#", 1)[0].rstrip("/") != origin.rstrip("/"):
+                page.goto(origin, wait_until="domcontentloaded", timeout=timeout)
+            for entry in entries:
+                page.evaluate(
+                    "([k, v]) => localStorage.setItem(k, v)",
+                    [str(entry.get("key") or ""), str(entry.get("value") or "")],
+                )
+            return {"ok": True, "n": len(entries)}
+
         if op == "get_dialogs":
             return {"ok": True, "dialogs": session["dialogs"]}
 

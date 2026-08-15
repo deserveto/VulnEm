@@ -69,12 +69,14 @@ screenshot.
 
 ## 5. Authenticated testing
 
-If the scan is authenticated, your browser context and
-`-b /home/pentester/cookies.txt` (curl) already carry the session. Verify
-cheaply with `browser_read_page` (logged-in UI) or
-`curl -b /home/pentester/cookies.txt .../rest/user/whoami`-style endpoint.
-Test the AUTHORIZED functions: IDOR (swap ids in URLs via browser or
-repeat_request), privilege-boundary pages, stored payloads in profile fields.
+If the scan is authenticated, your browser context AND curl already carry the
+session: `-b /home/pentester/cookies.txt`, plus `-H
+@/home/pentester/.vulnem/auth-header.txt` when the target uses token auth
+(never print the file contents — reference it). Verify cheaply with
+`browser_read_page` (logged-in UI) or a whoami-style endpoint via
+`repeat_request`. Test the AUTHORIZED functions: IDOR (swap ids in URLs via
+browser or repeat_request), privilege-boundary pages, stored payloads in
+profile fields.
 
 ## 6. Proxy-assisted analysis
 

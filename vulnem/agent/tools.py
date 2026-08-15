@@ -34,6 +34,9 @@ class ToolContext:
     proxy: Any = None                     # ProxyManager (proxy tools)
     sandbox_proxy_url: str | None = None  # sidecar URL as seen from the sandbox
     auth_cookies: list[dict[str, Any]] = field(default_factory=list)  # seeded session
+    auth_storage: list[dict[str, str]] = field(default_factory=list)  # localStorage seed
+    auth_origin: str = ""                 # origin the session belongs to
+    auth_bearer: bool = False             # header file staged in the sandbox
     run_dir: Path | None = None           # artifacts land in run_dir/artifacts/
     emit_event: Callable[[dict[str, Any]], None] | None = None  # session hook
 

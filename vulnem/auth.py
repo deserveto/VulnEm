@@ -28,6 +28,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 COOKIE_JAR_PATH = "/home/pentester/cookies.txt"
+HEADER_FILE_PATH = "/home/pentester/.vulnem/auth-header.txt"
 AUTH_AGENT = "vulnem-auth"
 
 
@@ -97,14 +98,19 @@ class AuthResult:
     detail: str = ""
     cookies: list[dict[str, Any]] = field(default_factory=list)  # playwright format
     cookie_names: list[str] = field(default_factory=list)
+    bearer: str = ""                       # bearer token (never logged)
+    storage: list[dict[str, str]] = field(default_factory=list)  # localStorage entries
+    origin: str = ""                       # origin the storage/cookies belong to
 
     def describe(self) -> dict[str, Any]:
-        """Transcript-safe summary — cookie NAMES only, never values."""
+        """Transcript-safe summary — cookie NAMES + storage keys only."""
         return {
             "ok": self.ok,
             "method": self.method,
             "detail": self.detail[:300],
             "cookie_names": self.cookie_names,
+            "has_bearer": bool(self.bearer),
+            "storage_keys": [s.get("key") for s in self.storage],
         }
 
 
@@ -119,7 +125,8 @@ class AuthSession:
             cookies = _normalize_cookie_list(self.creds.cookies)
             return AuthResult(ok=True, method="cookies",
                               detail=f"{len(cookies)} operator-provided cookies",
-                              cookies=cookies, cookie_names=[c["name"] for c in cookies])
+                              cookies=cookies, cookie_names=[c["name"] for c in cookies],
+                              origin=_origin_of(self.creds.login_url))
         if self.creds.method == "api":
             return self._via_api(sandbox)
         return self._via_browser(sandbox, proxy_url)
@@ -176,15 +183,18 @@ class AuthSession:
         time.sleep(3.0)  # SPA logins settle asynchronously
         state = op({"op": "read_page"})
         cookies = op({"op": "get_cookies"}).get("cookies") or []
+        storage = op({"op": "get_storage"}).get("storage") or []
         session_cookies = _session_cookies(cookies)
+        origin = _origin_of(creds.login_url)
         detail = f"login form submitted at {creds.login_url}; landed on " \
                  f"{str(state.get('url'))[:120]}"
-        if not session_cookies:
+        if not session_cookies and not storage:
             return AuthResult(ok=False, method="browser",
-                              detail=detail + " — but no session cookies were set "
-                                   "(check credentials/selectors)")
-        return AuthResult(ok=True, method="browser", detail=detail,
-                          cookies=cookies, cookie_names=[c["name"] for c in cookies])
+                              detail=detail + " — but no session cookies or storage "
+                                   "were set (check credentials/selectors)")
+        return AuthResult(ok=True, method="browser", detail=detail, origin=origin,
+                          cookies=cookies, cookie_names=[c["name"] for c in cookies],
+                          storage=storage)
 
     # -- API login ---------------------------------------------------------------
 
@@ -213,16 +223,60 @@ class AuthSession:
                               detail=f"login request failed (exit {res.exit_code}): "
                                      f"{res.stderr[:200]}")
         cookies = _parse_set_cookies(res.stdout, url)
-        if not cookies:
+        bearer = _extract_bearer(res.stdout,
+                                 str(api.get("token_json_path") or "token"))
+        if bearer:
+            # Token-auth SPAs typically ALSO expect the token as a cookie
+            # (e.g. Juice Shop's `token` cookie); stage it for both transports.
+            cookie_key = str(api.get("token_cookie_key") or "token")
+            host = urllib.parse.urlsplit(url).hostname or ""
+            if cookie_key and not any(c["name"] == cookie_key for c in cookies):
+                cookies.append({"name": cookie_key, "value": bearer,
+                                "domain": host, "path": "/"})
+        if not cookies and not bearer:
             return AuthResult(ok=False, method="api",
-                              detail=f"login to {url} set no cookies — check "
-                                     f"credentials (response head: {res.stdout[:200]!r})")
+                              detail=f"login to {url} set no cookies and no token — "
+                                     f"check credentials (response head: {res.stdout[:200]!r})")
+        what = []
+        if cookies:
+            what.append(f"{len(cookies)} cookie(s)")
+        if bearer:
+            what.append("bearer token")
         return AuthResult(ok=True, method="api",
-                          detail=f"API login to {url} set {len(cookies)} cookie(s)",
-                          cookies=cookies, cookie_names=[c["name"] for c in cookies])
+                          detail=f"API login to {url} set " + " and ".join(what),
+                          origin=_origin_of(url),
+                          cookies=cookies, cookie_names=[c["name"] for c in cookies],
+                          bearer=bearer)
 
 
 # -- cookie helpers --------------------------------------------------------------
+
+
+def _origin_of(url: str) -> str:
+    parts = urllib.parse.urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _extract_bearer(raw_response: str, json_path: str) -> str:
+    """Pull a bearer token out of a JSON response body (curl -i output)."""
+    body = raw_response.split("\r\n\r\n", 1)[-1].split("\n\n", 1)[-1]
+    try:
+        data = json.loads(body.strip())
+    except ValueError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    token = data.get(json_path)
+    if isinstance(token, str) and token:
+        return token
+    # one nesting level of {auth: {token: ...}} style paths
+    key = json_path.split(".")[-1]
+    for value in data.values():
+        if isinstance(value, dict) and isinstance(value.get(key), str):
+            return value[key]
+    return ""
 
 
 def _session_cookies(cookies: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -302,11 +356,23 @@ def cookies_to_netscape(cookies: list[dict[str, Any]]) -> str:
 
 
 def stage_session(sandbox, auth: AuthResult) -> None:
-    """Write the cookie jar into the sandbox so curl-based agents reuse it."""
-    if not auth.ok or not auth.cookies:
+    """Write the curl-side session artifacts into the sandbox.
+
+    - ``/home/pentester/cookies.txt`` — Netscape jar (``-b``)
+    - ``/home/pentester/.vulnem/auth-header.txt`` — ``Authorization: Bearer``
+      header file for ``curl -H @`` (apps that authenticate by token)
+    Values stay inside the sandbox; agents reference the files, never the
+    secrets themselves.
+    """
+    if not auth.ok:
         return
-    jar = cookies_to_netscape(auth.cookies)
     try:
-        sandbox.put_file(jar.encode("utf-8"), COOKIE_JAR_PATH)
+        if auth.cookies:
+            sandbox.put_file(cookies_to_netscape(auth.cookies).encode("utf-8"),
+                             COOKIE_JAR_PATH)
+        if auth.bearer:
+            sandbox.exec("mkdir -p /home/pentester/.vulnem", timeout=15)
+            sandbox.put_file(f"Authorization: Bearer {auth.bearer}\n".encode(),
+                             HEADER_FILE_PATH)
     except Exception:
-        logger.exception("could not stage cookie jar into sandbox")
+        logger.exception("could not stage session artifacts into sandbox")

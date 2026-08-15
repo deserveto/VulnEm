@@ -91,6 +91,9 @@ class AgentSession:
         restored_messages: list[dict[str, Any]] | None = None,
         proxy: Any | None = None,
         auth_cookies: list[dict[str, Any]] | None = None,
+        auth_storage: list[dict[str, str]] | None = None,
+        auth_origin: str = "",
+        auth_bearer: bool = False,
         run_dir: Any | None = None,
     ) -> None:
         self.record = record
@@ -109,6 +112,9 @@ class AgentSession:
             proxy=proxy,
             sandbox_proxy_url=getattr(proxy, "sandbox_proxy_url", None),
             auth_cookies=list(auth_cookies or []),
+            auth_storage=list(auth_storage or []),
+            auth_origin=auth_origin,
+            auth_bearer=auth_bearer,
             run_dir=run_dir,
             emit_event=self.emit,
         )

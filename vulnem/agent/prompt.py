@@ -22,11 +22,13 @@ vars intact (they are preconfigured); never unset http_proxy.
 
 _AUTH_BLOCK = """<authenticated_session>
 An AUTHENTICATED session has already been established for you by the operator:
-your browser session is pre-seeded with the cookies, and curl can reuse them
-with `-b /home/pentester/cookies.txt`. You never see the credentials and you
-must NOT attempt to log in, register, or reset the account — just use the
-session. Evidence that requires showing you are authenticated (e.g. an
-authenticated page rendering) should be captured via the browser tools.
+your browser session is pre-seeded with its cookies and storage, and curl can
+reuse it with `-b /home/pentester/cookies.txt` and, when the target uses
+token auth, `-H @/home/pentester/.vulnem/auth-header.txt`. You never see the
+credentials and you must NOT attempt to log in, register, or reset the
+account — just use the session. Evidence that requires showing you are
+authenticated (e.g. an authenticated page rendering) should be captured via
+the browser tools.
 </authenticated_session>
 """
 
@@ -251,7 +253,8 @@ def build_initial_task(scope: Scope, *, authenticated: bool = False) -> str:
     if authenticated:
         task += (
             "\nAn authenticated session is already established (browser context "
-            "pre-seeded; curl: `-b /home/pentester/cookies.txt`). Use it — do not "
+            "pre-seeded; curl: `-b /home/pentester/cookies.txt` and, for token "
+            "auth, `-H @/home/pentester/.vulnem/auth-header.txt`). Use it — do not "
             "log in again."
         )
     return task
