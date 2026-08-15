@@ -243,6 +243,12 @@ ROOT_SCRIPT = [
     ("", "create_agent", {"name": "xss-probe",
                           "objective": "Test XSS on the search page of {TARGET}. "
                                        "Read xss first. ~5 turns."}),
+    # Each completion-report message wakes a parked waiter early; the scripted
+    # root stands in for a real root reacting to wait results by waiting
+    # again until every child is terminal.
+    ("", "wait_for_agents", {}),
+    ("", "wait_for_agents", {}),
+    ("", "wait_for_agents", {}),
     ("", "wait_for_agents", {}),
     ("", "view_agent_graph", {}),
     ("Scan complete.", "finish_scan", {"summary": "Two specialists completed; "

@@ -343,12 +343,17 @@ def cookies_to_netscape(cookies: list[dict[str, Any]]) -> str:
         include_sub = "TRUE" if domain and not domain.startswith(".") else "FALSE"
         secure = "TRUE" if str(c.get("secure", "")).lower() == "true" else "FALSE"
         http_only = "#HttpOnly_" if str(c.get("httpOnly", "")).lower() == "true" else ""
+        # <= 0 means session cookie; the jar encodes that as 0 (negative
+        # values read as long-expired and curl silently drops them).
+        expires = int(c.get("expires", 0) or 0)
+        if expires <= 0:
+            expires = 0
         lines.append("\t".join([
             http_only + domain,
             include_sub,
             c.get("path") or "/",
             secure,
-            str(int(c.get("expires", 0) or far_future) or far_future),
+            str(expires),
             c.get("name") or "",
             c.get("value") or "",
         ]))

@@ -12,7 +12,6 @@ Usage: .venv/Scripts/python scripts/smoke_phase3.py
 
 from __future__ import annotations
 
-import json
 import sys
 import time
 import uuid
@@ -21,12 +20,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import docker
+import docker  # noqa: E402
 
-from vulnem.proxy.manager import ProxyManager
-from vulnem.sandbox.docker import Sandbox
-from vulnem.scope import Scope
-from vulnem.tools import browser
+from vulnem.proxy.manager import ProxyManager  # noqa: E402
+from vulnem.sandbox.docker import Sandbox  # noqa: E402
+from vulnem.scope import Scope  # noqa: E402
+from vulnem.tools import browser  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -92,7 +91,6 @@ def main() -> int:
               f"shot={shot}")
         time.sleep(1.5)
         flows = pm.read_flows()
-        browser_flows = [f for f in flows if (f.get("user-agent") or "")]
         check("browser traffic also captured by proxy", len(flows) >= 3,
               f"n_flows={len(flows)}")
 

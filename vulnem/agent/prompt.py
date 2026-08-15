@@ -141,6 +141,9 @@ cover the rest.
 - Report every validated finding with report_finding BEFORE agent_finish —
   your findings live on even if your summary is short. Always set the `url`
   field so overlapping findings from other specialists can be merged.
+- FILE IMMEDIATELY: the moment a finding is validated, report it in that
+  same turn. Turn caps and budgets can stop you at any moment — a finding
+  that is not filed does not exist.
 </rules>
 """
 

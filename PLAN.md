@@ -4,7 +4,7 @@ Autonomous AI penetration-testing agent for **authorized** security testing,
 built Strix-style: LLM agents + an isolated Docker sandbox full of security
 tooling, driven through recon → testing → validated PoC → report.
 
-This is the living roadmap. Current state: **Phase 2 shipped**, Phase 3 next.
+This is the living roadmap. Current state: **Phase 3 shipped**, Phase 4 next.
 
 ---
 
@@ -39,11 +39,11 @@ Design principles we carry over — these are the load-bearing decisions:
 | LLM access | LiteLLM (`VULNEM_LLM`, provider-agnostic) | done |
 | Agent loop | hand-rolled loop (`vulnem/agent/loop.py`) | revisit only if we need streaming/interruption |
 | Sandbox | Docker + Kali tools image (`containers/Dockerfile`) | done |
-| Browser | Playwright headless Chromium in sandbox | Phase 3 |
-| Proxy | mitmproxy (Python-scriptable) | Phase 3 |
+| Browser | Playwright headless Chromium in sandbox | done (Phase 3) |
+| Proxy | mitmproxy (Python-scriptable) | done (Phase 3) |
 | UI | Textual TUI or local web viewer over `transcript.jsonl` | Phase 4 |
 | Reports | `report.md` + `findings.json` (done) → SARIF, PDF | Phase 4 |
-| Test targets | OWASP Juice Shop (done) → DVWA, vulhub | Phase 3–4 |
+| Test targets | Juice Shop + DVWA (`lab/`) | done |
 
 ---
 
@@ -121,24 +121,52 @@ the next tuning pass: child turn caps proved tight for verbose models
 aggressive probing briefly knocked Juice Shop over — worth a
 non-destructive reminder in the specialist prompt.
 
-## Phase 3 — Browser + proxy (web-app pentester, not just "agent with nmap")
+## Phase 3 — Browser + proxy ✅ (shipped 2026-08-16)
 
-- **Playwright tool** (`vulnem/tools/browser.py`): headless Chromium inside
-  the sandbox; navigate, click, fill, screenshot (screenshots flow into the
-  transcript → evidence). Unlocks XSS, CSRF, clickjacking, auth-flow testing.
-- **mitmproxy integration** (`vulnem/tools/proxy.py`): agent tools
-  `list_requests`, `view_request`, `repeat_request`, `view_sitemap`;
-  traffic from sandbox routed through the proxy.
-- **Network-layer scope enforcement**: proxy allowlist derived from
-  `vulnem/scope.py` — out-of-scope requests blocked and logged, closing
-  the prompt-leak gap.
-- **Grey-box authenticated scans**: `--instruction` / credentials file;
-  session cookies handled via the proxy/browser, not the prompt.
-- Second lab target: DVWA or a vulhub compose (different tech stack to
-  prove skills generalize).
+VulnEm is now a real web-app pentester: agents drive a headless browser,
+all HTTP flows through a scope-enforcing proxy, and scans can run
+authenticated without secrets ever touching a prompt.
+
+What exists (on top of Phase 2):
+
+- **Sandbox image** — Playwright + headless Chromium baked in at build time
+  (system-wide browser path) so browser tooling works on internet-less lab
+  networks. Sandbox gains `put_file`/`get_file` (tar) and routes exec'd HTTP
+  through the proxy sidecar via env vars.
+- **Browser tools** (`vulnem/tools/browser.py` + in-sandbox daemon) —
+  `browser_navigate/click/fill/read_page/evaluate/screenshot`: one stateful
+  Chromium context per agent (parallel specialists never share state),
+  dialogs recorded as XSS *execution* evidence, screenshots persisted to
+  `runs/<id>/artifacts/<agent>/` and cited as finding evidence. Host-side
+  scope check refuses out-of-scope navigations and logs them.
+- **Proxy sidecar** (`vulnem/proxy/`) — one mitmproxy container per scan on
+  the sandbox network. Its addon (`scope_guard.py`) enforces an allowlist
+  derived from `vulnem/scope.py`: out-of-scope requests → 403 / CONNECT
+  denied, logged to the transcript + `run_dir/proxy-blocked.jsonl`. Every
+  exchange is captured to a flow log the host reads back (get_archive) —
+  scope is now prompt + network + proxy, three layers, none optional.
+- **Proxy tools** — `list_requests`, `view_request`, `repeat_request`,
+  `view_sitemap`. Replays are re-issued from the sandbox *through* the
+  proxy with the live session, so they can never bypass scope.
+- **Authenticated scans** (`--creds <file>`) — the host logs in (browser
+  form / API / raw cookies) before any agent runs and seeds the session
+  into every browser context plus a curl cookie jar / token header file.
+  Credential values never enter a prompt or the transcript (only cookie
+  names + method are recorded). Works for cookie-, token-, and
+  localStorage-based auth (Juice Shop, DVWA verified live).
+- **Second lab target** — DVWA (PHP) joins Juice Shop (Node) in
+  `lab/docker-compose.yml` with creds examples; same skills, different
+  stack.
+- **Skills** — `browser_testing` pack (browser-vs-curl decision table,
+  execution-proof workflow); `xss` + `recon` updated where the tools change
+  the methodology.
+- **Tests** — 29 new offline tests (64 total), `scripts/smoke_phase3.py`
+  (9-check real-stack smoke), and the mock e2e extended to a 4th
+  browser-driven specialist — all pass without an LLM key.
 
 Exit criteria: an authenticated Juice Shop run that finds and PoC-validates
-a stored-XSS via the browser tool, with the proxy log as evidence.
+a stored-XSS via the browser tool, with the proxy log as evidence — see
+TODO.md run notes for the real-run outcomes.
 
 ## Phase 4 — Polish: live UI, reports, white-box, CI
 

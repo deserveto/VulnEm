@@ -41,9 +41,16 @@ result — the data source for a future live UI).
 ## Scanning your own lab target
 
 ```bash
-# Reusable lab you can also browse at http://localhost:3000:
+# Reusable lab you can also browse at http://localhost:3000 (Juice Shop)
+# and http://localhost:4280 (DVWA):
 docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
 vulnem scan http://juice-shop:3000 --network vulnem-lab_labnet
+
+# Authenticated scan: credentials live in a file, never in a prompt:
+vulnem scan http://juice-shop:3000 --network vulnem-lab_labnet \
+  --creds lab/juice-shop-creds.json --budget 200
+vulnem scan http://dvwa --network vulnem-lab_labnet \
+  --creds lab/dvwa-creds.json --budget 200
 
 # Any containerized target: attach the sandbox to the same Docker network.
 ```
@@ -83,15 +90,31 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
   specialists, parks in `wait_for_agents` (one wait — no polling), and
   synthesizes the final report from their completion reports.
 - **Specialists** (`vulnem/agents/session.py`) — Phase 1 hands-on toolset
-  (`exec_command`, `read_skill`, `report_finding`, `think`) plus
-  `agent_finish`, which files a structured completion report into the
-  parent's session. Each agent is an asyncio task on the shared sandbox;
-  a crashed child is isolated and reported, the scan continues.
+  (`exec_command`, `read_skill`, `report_finding`, `think`) plus the Phase 3
+  browser tools (`browser_navigate/click/fill/read_page/evaluate/screenshot`,
+  a stateful headless-Chromium session per agent) and proxy tools
+  (`list_requests`, `view_request`, `repeat_request`, `view_sitemap` over the
+  captured traffic), plus `agent_finish`, which files a structured completion
+  report into the parent's session. Each agent is an asyncio task on the
+  shared sandbox; a crashed child is isolated and reported, the scan continues.
 - **Lifecycle tools are the only exit** — an agent ends only via
   `finish_scan` (root/solo) or `agent_finish` (specialist); plain text
   never ends a turn.
-- **Skills** (`skills/*.md`) — 14 markdown methodology packs loaded on
-  demand: recon, sql_injection, xss, command_injection,
+- **Browser + proxy** (`vulnem/tools/`, `vulnem/proxy/`) — every scan runs a
+  mitmproxy sidecar next to the sandbox. The sandbox's HTTP traffic is
+  routed through it; the sidecar's addon enforces the scope allowlist
+  (out-of-scope requests get a 403 and are logged to the transcript + run
+  dir), records every exchange to a flow log the proxy tools read back, and
+  `repeat_request` replays through the same enforcement. Browser
+  screenshots land in `runs/<id>/artifacts/<agent>/` and are cited as
+  finding evidence.
+- **Authenticated scans** (`vulnem/auth.py`, `--creds <file>`) — the host
+  logs in (browser form / API / raw cookies) before any agent runs and seeds
+  the session into every browser context plus a curl cookie jar
+  (`-b /home/pentester/cookies.txt`, `-H @/home/pentester/.vulnem/auth-header.txt`
+  for token auth). Credential values never enter a prompt or the transcript.
+- **Skills** (`skills/*.md`) — 15 markdown methodology packs loaded on
+  demand: recon, sql_injection, xss, browser_testing, command_injection,
   broken_access_control, idor, ssrf, auth_jwt, ssti, file_upload,
   open_redirect, prototype_pollution, business_logic,
   coordination/root_agent. Add a new `.md` file (subdirs allowed) with a
@@ -120,8 +143,9 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
 
 Useful flags: `vulnem scan --budget N` (scan-wide turn budget),
 `--max-agents N`, `--solo` (Phase 1 single-agent mode),
-`vulnem resume <run_dir> [--extend-turns N]` (continue an interrupted
-scan from its snapshot).
+`--creds <file>` (authenticated scan — secrets stay out of prompts),
+`--no-proxy` (drop the mitmproxy sidecar layer), `vulnem resume <run_dir>
+[--extend-turns N]` (continue an interrupted scan from its snapshot).
 
 ## Safety model
 
@@ -129,10 +153,16 @@ scan from its snapshot).
    non-root user. Lab runs attach it to an *internal* Docker network: the
    sandbox has no internet route, so out-of-scope targets are unreachable by
    construction.
-2. **Authorization gate** — non-lab scans require interactive confirmation.
-3. **Non-destructive rules** — enforced via system prompt (no DoS, no data
+2. **Proxy allowlist** — the sandbox's HTTP traffic flows through a
+   scope-enforcing mitmproxy sidecar: out-of-scope requests are blocked
+   (403 / CONNECT denied) and logged. Browser navigations are host-checked
+   against the same scope before reaching Chromium.
+3. **Prompt scope** — every agent inherits the same system-verified scope
+   block; three layers, none of them optional.
+4. **Authorization gate** — non-lab scans require interactive confirmation.
+5. **Non-destructive rules** — enforced via system prompt (no DoS, no data
    destruction, minimal reversible payloads; validation over damage).
-4. **Budgets** — per-agent turn caps plus a scan-wide turn/token budget;
+6. **Budgets** — per-agent turn caps plus a scan-wide turn/token budget;
    agents get wrap-up grace, then force-stop.
 
 ## Roadmap
@@ -140,7 +170,8 @@ scan from its snapshot).
 - [x] Phase 1 — single agent, sandbox, skills, findings, demo lab
 - [x] Phase 2 — coordinator + specialist agents: parallel graph, mailboxes,
   budgets, crash isolation, cross-agent dedupe, snapshot/resume
-- [ ] Phase 3 — browser tool (Playwright) + HTTP proxy with scope enforcement
+- [x] Phase 3 — browser tool (Playwright) + HTTP proxy with scope enforcement,
+  authenticated scans, DVWA second lab target
 - [ ] Phase 4 — live TUI/web viewer over `transcript.jsonl`, SARIF output,
   white-box mode, evals
 

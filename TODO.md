@@ -69,15 +69,36 @@ for verbose models; fragile-target probing reminder needed.
 
 ## Phase 3 — Browser + proxy ← CURRENT
 
-- [ ] Playwright headless Chromium in sandbox image
-- [ ] Browser tool: navigate/click/fill/screenshot; screenshots → transcript evidence
-- [ ] mitmproxy sidecar; sandbox traffic routed through it
-- [ ] Proxy tools: list_requests, view_request, repeat_request, view_sitemap
-- [ ] Network-layer scope allowlist (block + log out-of-scope)
-- [ ] Authenticated scans: credentials file, session via proxy/browser
-- [ ] Second lab target (DVWA or vulhub) to prove skills generalize
+- [x] Playwright headless Chromium in sandbox image (baked at build time,
+      system-wide browser path; works with no internet at runtime)
+- [x] Browser tool: navigate/click/fill/read_page/evaluate/screenshot;
+      stateful per-agent sessions via an in-sandbox daemon; screenshots →
+      runs/<id>/artifacts/ + transcript evidence events
+- [x] mitmproxy sidecar on the lab network; sandbox HTTP routed through it
+      (proxy env for exec'd clients, per-context proxy for Chromium)
+- [x] Proxy tools: list_requests, view_request, repeat_request (replays from
+      the sandbox through the proxy, never bypassing scope), view_sitemap
+- [x] Network-layer scope allowlist (mitmproxy addon derived from
+      vulnem/scope.py — out-of-scope blocked 403/CONNECT-denied + logged to
+      transcript + run dir; browser navigations host-checked too)
+- [x] Authenticated scans: --creds file (browser form / API / cookies),
+      session seeded into browser contexts + curl jar + token header file;
+      secrets never in prompts or the transcript
+- [x] Second lab target: DVWA (PHP) alongside Juice Shop (Node) in
+      lab/docker-compose.yml + creds examples for both
+- [x] Skills: browser_testing pack (15 total); xss/recon updated for the
+      browser+proxy workflow; prompts cover browser-vs-curl choice
+- [x] Tests: test_browser.py + test_proxy.py (29 new, 64 total);
+      scripts/smoke_phase3.py (real-stack 9-check smoke); mock e2e extended
+      with a browser-driven specialist — passes with no LLM key
 - [ ] Definition of done: authenticated stored-XSS found + PoC'd via browser,
-      proxy log as evidence
+      proxy log as evidence (real runs in flight — see below)
+
+Phase 3 run notes: first real authenticated run (200-turn budget) proved the
+plumbing end to end (auth seeded, ~8k proxy flows captured, browser tools
+used mid-scan, budget force-stop + honest synthesis) but every specialist
+hit the default 30-turn cap mid-investigation without filing — rerun with
+VULNEM_CHILD_MAX_TURNS=45 + file-immediately prompt nudge.
 
 ## Phase 4 — Polish
 
