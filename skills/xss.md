@@ -65,6 +65,12 @@ Find inputs that persist and render later (profile fields, feedback/comments):
    marker) and `browser_screenshot` the result. Reference the proxy-captured
    request id (`view_request`) in the evidence.
 
+Captcha-gated storage endpoints: fetch the captcha endpoint first and look
+at what it actually returns — many disclose the answer outright or use
+plain arithmetic ("6-5-6") you can compute and submit with the POST
+(captchaId + solved value). A captcha that leaks its answer is not a barrier
+(and is itself worth noting in the finding).
+
 ## Severity guide
 
 Reflected in search (needs click) → usually medium/high. Stored → high.
