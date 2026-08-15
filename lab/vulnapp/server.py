@@ -66,13 +66,15 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "/search":
             q = params.get("q", [""])[0]
             # planted flaw: SQL injection — user input concatenated into SQL
+            rows: list = []
+            err = ""
             conn = sqlite3.connect(DB_PATH)
             try:
                 rows = conn.execute(
                     f"SELECT id, name, price FROM products WHERE name LIKE '%{q}%'"
                 ).fetchall()
             except sqlite3.OperationalError as exc:
-                rows, err = [], str(exc)
+                err = str(exc)
             finally:
                 conn.close()
             # planted flaw: reflected XSS — q echoed back without escaping

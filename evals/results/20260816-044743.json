@@ -1,0 +1,28 @@
+[
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 2,
+    "ground_truth": 8,
+    "recall": 0.25,
+    "fp_rate": 0.0,
+    "matched": [
+      "js-sqli-login",
+      "js-sqli-search"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-idor-users",
+      "js-jwt-flaws",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [],
+    "tokens": 4899741,
+    "turns": 193,
+    "wall_seconds": 1871,
+    "model": "openai/DeepSeek-V4-Pro",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-211626-juice-shop-8a32"
+  }
+]

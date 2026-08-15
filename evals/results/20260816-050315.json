@@ -1,0 +1,27 @@
+[
+  {
+    "gt": "dvwa",
+    "target": "http://dvwa",
+    "findings": 1,
+    "ground_truth": 7,
+    "recall": 0.143,
+    "fp_rate": 0.0,
+    "matched": [
+      "dvwa-sqli"
+    ],
+    "missed": [
+      "dvwa-cmd-injection",
+      "dvwa-csrf",
+      "dvwa-file-inclusion",
+      "dvwa-file-upload",
+      "dvwa-xss-reflected",
+      "dvwa-xss-stored"
+    ],
+    "false_positives": [],
+    "tokens": 3896366,
+    "turns": 264,
+    "wall_seconds": 909,
+    "model": "openai/DeepSeek-V4-Pro",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-214757-dvwa-c52f"
+  }
+]

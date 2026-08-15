@@ -1,0 +1,137 @@
+[
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 0,
+    "ground_truth": 8,
+    "recall": 0.0,
+    "fp_rate": 0.0,
+    "matched": [],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-idor-users",
+      "js-jwt-flaws",
+      "js-sqli-login",
+      "js-sqli-search",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [],
+    "tokens": 4146318,
+    "turns": 185,
+    "wall_seconds": 1059,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-191526-juice-shop-b0d7"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 2,
+    "ground_truth": 8,
+    "recall": 0.25,
+    "fp_rate": 0.0,
+    "matched": [
+      "js-idor-users",
+      "js-whoami-leak"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-jwt-flaws",
+      "js-sqli-login",
+      "js-sqli-search",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [],
+    "tokens": 4209310,
+    "turns": 163,
+    "wall_seconds": 686,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-193335-juice-shop-a079"
+  },
+  {
+    "gt": "dvwa",
+    "target": "http://dvwa",
+    "findings": 3,
+    "ground_truth": 7,
+    "recall": 0.429,
+    "fp_rate": 0.0,
+    "matched": [
+      "dvwa-cmd-injection",
+      "dvwa-sqli",
+      "dvwa-xss-reflected"
+    ],
+    "missed": [
+      "dvwa-csrf",
+      "dvwa-file-inclusion",
+      "dvwa-file-upload",
+      "dvwa-xss-stored"
+    ],
+    "false_positives": [],
+    "tokens": 3945399,
+    "turns": 220,
+    "wall_seconds": 940,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-193336-dvwa-6251"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 4,
+    "ground_truth": 8,
+    "recall": 0.125,
+    "fp_rate": 0.75,
+    "matched": [
+      "js-sqli-search"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-idor-users",
+      "js-jwt-flaws",
+      "js-sqli-login",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [
+      "VULN-001",
+      "VULN-003",
+      "VULN-004"
+    ],
+    "tokens": 4498828,
+    "turns": 173,
+    "wall_seconds": 435,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-195155-juice-shop-69ce"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 5,
+    "ground_truth": 8,
+    "recall": 0.375,
+    "fp_rate": 0.4,
+    "matched": [
+      "js-sqli-login",
+      "js-sqli-search",
+      "js-xss-dom-search"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-idor-users",
+      "js-jwt-flaws",
+      "js-whoami-leak"
+    ],
+    "false_positives": [
+      "VULN-002",
+      "VULN-005"
+    ],
+    "tokens": 3107740,
+    "turns": 114,
+    "wall_seconds": 582,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-195935-juice-shop-ea92"
+  }
+]

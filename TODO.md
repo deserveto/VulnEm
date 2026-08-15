@@ -155,10 +155,39 @@ server sanitizes the stored channels the agent correctly identified.
       (vuln-app 6 planted, juice-shop 8 class-level, dvwa 7 modules),
       class+endpoint matcher, recall/FP/cost tables to evals/results/
 
-Real-run accounting (2026-08-16, hcnsec relay `openai/auto` →
-agnes-2.5-flash, all `--budget`-bound): see `evals/results/` tables.
-Historical poolside baselines: 38% recall / 40% FP (juice ea92),
-43% / 0% (dvwa-6251), 25% / 0% (a079).
+Real-run accounting (2026-08-16, hcnsec relay — flash = `openai/auto`
+(agnes-2.5-flash), pro = `openai/DeepSeek-V4-Pro` (nemotron-3-ultra-550b),
+all authenticated + proxied + `--budget`-bound; full tables in
+`evals/results/`):
+
+- `runs/20260815-205914-vuln-app-e129` (flash, white-box, 100 turns):
+  **100% recall on all 6 planted flaws** in 4 min / 672k tokens; 8/9
+  findings carry file:line + fix patches; cross-agent dedupe merged the
+  whitebox-analyst + injection overlaps; root followed the whitebox
+  nudge and spawned a dedicated source-analysis specialist.
+- `runs/20260815-210529-juice-shop-9e7b` (flash, 200 turns): 25% recall /
+  50% FP — the failure mode the provider warning predicted: 2 specialists
+  hit 30-40-turn caps without filing, root finished while injection was
+  still live (force-stopped, nothing filed), and the JWT specialist filed
+  3 NEGATIVE results as findings → prompt fix committed (negative results
+  are not findings); needs a flash re-run to confirm.
+- `runs/20260815-211626-juice-shop-8a32` (pro, 200 turns): 25% recall /
+  **0% FP** — both SQLis (login auth-bypass + search) properly validated;
+  but sequential recon ate 90 turns and the budget capped coverage at 193
+  turns. Pro is precise and slow (~30 min/run).
+- `runs/20260815-214757-dvwa-c52f` (pro, 300 turns): 14% recall / 0% FP —
+  validated SQLi only; specialists hit the per-child caps root assigned
+  (35) mid-validation and filed nothing (the Phase 3 file-immediately
+  lesson again: root's `create_agent max_turns` choice overrides
+  VULNEM_CHILD_MAX_TURNS).
+- Historical poolside baselines (same GT): juice ea92 38%/40%, juice
+  a079 25%/0%, dvwa-6251 43%/0%, 69ce 12%/75%.
+
+Provider verdict: flash = fast/cheap/broad but loose (needs the negative-
+findings guard + tighter root discipline); pro = precise but budget-hungry
+— give it budget 300+ and child caps 55+ for coverage. White-box + small
+targets are flash's sweet spot. Tuning knobs for real runs:
+VULNEM_CHILD_MAX_TURNS=55, VULNEM_MAX_TOTAL_TOKENS=12000000.
 
 Phase 4 exit criteria: MET — CI pr-check job live, TUI replays recorded
 runs, SARIF validated against the OASIS schema, eval table from multiple

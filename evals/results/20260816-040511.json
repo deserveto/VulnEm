@@ -1,0 +1,29 @@
+[
+  {
+    "gt": "vuln-app",
+    "target": "http://vuln-app:5000",
+    "findings": 9,
+    "ground_truth": 6,
+    "recall": 1.0,
+    "fp_rate": 0.333,
+    "matched": [
+      "vulnapp-cmdinj-ping",
+      "vulnapp-hardcoded-creds",
+      "vulnapp-secrets-status",
+      "vulnapp-sqli-search",
+      "vulnapp-traversal-note",
+      "vulnapp-xss-search"
+    ],
+    "missed": [],
+    "false_positives": [
+      "VULN-004",
+      "VULN-008",
+      "VULN-009"
+    ],
+    "tokens": 672358,
+    "turns": 61,
+    "wall_seconds": 253,
+    "model": "openai/auto",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-205914-vuln-app-e129"
+  }
+]
