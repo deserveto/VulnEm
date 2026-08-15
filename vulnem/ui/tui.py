@@ -14,6 +14,7 @@ renders it and paces ingestion.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import ClassVar
@@ -142,10 +143,8 @@ class VulnEmApp(App[None]):
         for line in chunk[: last_nl + 1].splitlines():
             if not line.strip():
                 continue
-            try:
+            with contextlib.suppress(json.JSONDecodeError, UnicodeDecodeError):
                 self._pending.append(json.loads(line.decode("utf-8")))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                pass
 
     def _tick(self) -> None:
         if self._paused:
