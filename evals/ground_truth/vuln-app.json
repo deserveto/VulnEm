@@ -1,0 +1,60 @@
+{
+  "target": "http://vuln-app:5000",
+  "notes": "VulnEm's own planted-flaw app (lab/vulnapp). Every flaw is deliberate; recall against this file is exact. Endpoint matching is on the normalized path (query strings ignored).",
+  "findings": [
+    {
+      "id": "vulnapp-sqli-search",
+      "title": "SQL injection in product search",
+      "class": "sql_injection",
+      "cwe": "CWE-89",
+      "endpoint": "/search",
+      "severity": "critical",
+      "file": "server.py"
+    },
+    {
+      "id": "vulnapp-xss-search",
+      "title": "Reflected XSS in search results",
+      "class": "xss",
+      "cwe": "CWE-79",
+      "endpoint": "/search",
+      "severity": "high",
+      "file": "server.py"
+    },
+    {
+      "id": "vulnapp-traversal-note",
+      "title": "Path traversal in note reader",
+      "class": "path_traversal",
+      "cwe": "CWE-22",
+      "endpoint": "/note",
+      "severity": "high",
+      "file": "server.py"
+    },
+    {
+      "id": "vulnapp-cmdinj-ping",
+      "title": "OS command injection in ping",
+      "class": "command_injection",
+      "cwe": "CWE-78",
+      "endpoint": "/ping",
+      "severity": "critical",
+      "file": "server.py"
+    },
+    {
+      "id": "vulnapp-secrets-status",
+      "title": "Debug endpoint leaks hardcoded API key and environment",
+      "class": "information_disclosure",
+      "cwe": "CWE-200",
+      "endpoint": "/status",
+      "severity": "high",
+      "file": "server.py"
+    },
+    {
+      "id": "vulnapp-hardcoded-creds",
+      "title": "Hardcoded admin credential",
+      "class": "hardcoded_secret",
+      "cwe": "CWE-798",
+      "endpoint": "/login",
+      "severity": "medium",
+      "file": "server.py"
+    }
+  ]
+}

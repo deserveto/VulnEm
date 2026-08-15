@@ -1,0 +1,71 @@
+{
+  "target": "http://juice-shop:3000",
+  "name": "juice-shop",
+  "notes": "Class-level ground truth for OWASP Juice Shop (current release) — the vulnerability classes a competent budget-bound scan should surface. Derived from the app's own challenge documentation and cross-checked against the Phase 3 runs (ea92, b0d7, a079). Stored-XSS is deliberately NOT listed: the app sanitizes its stored channels server-side (verified 2026-08-16); its designed XSS surface is the DOM flavor.",
+  "findings": [
+    {
+      "id": "js-sqli-login",
+      "title": "SQL injection in login email field (auth bypass)",
+      "class": "sql_injection",
+      "cwe": "CWE-89",
+      "endpoint": "/rest/user/login",
+      "severity": "critical"
+    },
+    {
+      "id": "js-sqli-search",
+      "title": "Boolean-based blind SQL injection in product search",
+      "class": "sql_injection",
+      "cwe": "CWE-89",
+      "endpoint": "/rest/products/search",
+      "severity": "high"
+    },
+    {
+      "id": "js-xss-dom-search",
+      "title": "DOM-based XSS via search query",
+      "class": "xss",
+      "cwe": "CWE-79",
+      "endpoint": "/search",
+      "severity": "high"
+    },
+    {
+      "id": "js-idor-users",
+      "title": "IDOR / unprotected user data API",
+      "class": "idor",
+      "cwe": "CWE-639",
+      "endpoint": "/api/users",
+      "severity": "critical"
+    },
+    {
+      "id": "js-jwt-flaws",
+      "title": "JWT flaws (forgery / token data exposure)",
+      "class": "broken_auth",
+      "cwe": "CWE-347",
+      "endpoint": null,
+      "severity": "high"
+    },
+    {
+      "id": "js-admin-config-exposure",
+      "title": "Admin/application configuration exposure",
+      "class": "information_disclosure",
+      "cwe": "CWE-200",
+      "endpoint": "/admin",
+      "severity": "high"
+    },
+    {
+      "id": "js-whoami-leak",
+      "title": "Unauthenticated whoami endpoint leaks session data",
+      "class": "information_disclosure",
+      "cwe": "CWE-200",
+      "endpoint": "/rest/user/whoami",
+      "severity": "medium"
+    },
+    {
+      "id": "js-header-misconfig",
+      "title": "Missing CSP / misconfigured CORS headers",
+      "class": "misconfiguration",
+      "cwe": "CWE-1022",
+      "endpoint": null,
+      "severity": "low"
+    }
+  ]
+}

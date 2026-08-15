@@ -1,0 +1,63 @@
+{
+  "target": "http://dvwa",
+  "name": "dvwa",
+  "notes": "Class-level ground truth for DVWA (default low/hard security as shipped in vulnerables/web-dvwa) — one entry per vulnerable module, endpoint-anchored on the module route.",
+  "findings": [
+    {
+      "id": "dvwa-cmd-injection",
+      "title": "OS command injection in ping module",
+      "class": "command_injection",
+      "cwe": "CWE-78",
+      "endpoint": "/vulnerabilities/exec",
+      "severity": "critical"
+    },
+    {
+      "id": "dvwa-sqli",
+      "title": "SQL injection in SQLi (SQLite) module",
+      "class": "sql_injection",
+      "cwe": "CWE-89",
+      "endpoint": "/vulnerabilities/sqli",
+      "severity": "critical"
+    },
+    {
+      "id": "dvwa-xss-reflected",
+      "title": "Reflected XSS module",
+      "class": "xss",
+      "cwe": "CWE-79",
+      "endpoint": "/vulnerabilities/xss_r",
+      "severity": "medium"
+    },
+    {
+      "id": "dvwa-xss-stored",
+      "title": "Stored XSS in guestbook",
+      "class": "xss",
+      "cwe": "CWE-79",
+      "endpoint": "/vulnerabilities/xss_s",
+      "severity": "high"
+    },
+    {
+      "id": "dvwa-file-upload",
+      "title": "Unrestricted file upload",
+      "class": "file_upload",
+      "cwe": "CWE-434",
+      "endpoint": "/vulnerabilities/upload",
+      "severity": "high"
+    },
+    {
+      "id": "dvwa-csrf",
+      "title": "CSRF in password change",
+      "class": "csrf",
+      "cwe": "CWE-352",
+      "endpoint": "/vulnerabilities/csrf",
+      "severity": "medium"
+    },
+    {
+      "id": "dvwa-file-inclusion",
+      "title": "Local/remote file inclusion",
+      "class": "file_inclusion",
+      "cwe": "CWE-98",
+      "endpoint": "/vulnerabilities/fi",
+      "severity": "high"
+    }
+  ]
+}

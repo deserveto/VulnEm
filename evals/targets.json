@@ -1,0 +1,26 @@
+{
+  "targets": {
+    "vuln-app": {
+      "target": "http://vuln-app:5000",
+      "network": "vulnem-lab_labnet",
+      "gt": "vuln-app",
+      "budget": 100,
+      "source": "lab/vulnapp",
+      "notes": "white-box capable: source ships in lab/vulnapp"
+    },
+    "juice-shop": {
+      "target": "http://juice-shop:3000",
+      "network": "vulnem-lab_labnet",
+      "gt": "juice-shop",
+      "creds": "lab/juice-shop-creds.json",
+      "budget": 200
+    },
+    "dvwa": {
+      "target": "http://dvwa",
+      "network": "vulnem-lab_labnet",
+      "gt": "dvwa",
+      "creds": "lab/dvwa-creds.json",
+      "budget": 200
+    }
+  }
+}
