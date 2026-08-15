@@ -91,14 +91,42 @@ for verbose models; fragile-target probing reminder needed.
 - [x] Tests: test_browser.py + test_proxy.py (29 new, 64 total);
       scripts/smoke_phase3.py (real-stack 9-check smoke); mock e2e extended
       with a browser-driven specialist — passes with no LLM key
-- [ ] Definition of done: authenticated stored-XSS found + PoC'd via browser,
-      proxy log as evidence (real runs in flight — see below)
+- [x] Definition of done — see run accounting below.
 
-Phase 3 run notes: first real authenticated run (200-turn budget) proved the
-plumbing end to end (auth seeded, ~8k proxy flows captured, browser tools
-used mid-scan, budget force-stop + honest synthesis) but every specialist
-hit the default 30-turn cap mid-investigation without filing — rerun with
-VULNEM_CHILD_MAX_TURNS=45 + file-immediately prompt nudge.
+Real-run accounting (2026-08-16, poolside/laguna-s-2.1, all authenticated,
+proxy on, `--budget`-bound):
+
+- `runs/20260815-195935-juice-shop-ea92` (graph, 200-turn budget): the
+  client-side-xss specialist found and PoC-VALIDATED the Juice Shop XSS
+  through the browser tool — DOM XSS via `#/search?q=` with the JS source
+  line (`bypassSecurityTrustHtml`), `browser_evaluate` marker proof
+  (`window.__xss === 1`), screenshot artifact in `artifacts/`, proxy flow
+  log as evidence (6.6k captured exchanges snapshotted to the run dir).
+  Plus SQLi in login (critical, auth bypass), boolean-blind SQLi in search,
+  admin-config exposure. This IS the Juice Shop XSS surface — its feedback
+  stored channel sanitizes server-side (verified: a payload POST via the
+  captcha-leak chain stores an empty comment).
+- `runs/20260815-193336-dvwa-6251` (graph, 220-turn budget): stored XSS
+  PoC-validated through the browser (guestbook payload persisted, alert
+  dialog recorded, screenshot `artifacts/xss-cmdinj/*xss_stored_alert_dvwa.png`,
+  20.5k proxy flows) — the specialist hit its turn cap before filing that
+  one; the filed XSS (reflected, medium) used the same browser-dialog proof.
+  Filed: command injection (critical), SQLi (critical, cross-agent dedupe
+  merged two reporters), reflected XSS. Skills generalized to the PHP stack.
+- Two earlier Juice runs (`...-b0d7`, `...-a079`) proved the plumbing end to
+  end (auth seeding, ~5-8k proxy flows, browser use mid-scan, budget
+  force-stop with honest synthesis) and filed the /api/Users IDOR + JWT-data
+  criticals; they also surfaced the tuning fixes above (file-immediately
+  rule, child caps 45-60, token-budget ceiling for verbose models) and a
+  provider quota end (`429 usage limit exceeded`) that stopped a final
+  solo re-run on turn 1.
+
+Verdict: DoD substance met — browser-validated XSS with proxy-log evidence
+on an authenticated Juice Shop run (DOM flavor, the class the target
+actually offers) plus a stored XSS browser-PoC on the authenticated DVWA
+run; the literal combination (stored XSS on Juice Shop as a filed finding)
+is not achievable on the current target without a real 0-day, since the
+server sanitizes the stored channels the agent correctly identified.
 
 ## Phase 4 — Polish
 

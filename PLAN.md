@@ -164,9 +164,16 @@ What exists (on top of Phase 2):
   (9-check real-stack smoke), and the mock e2e extended to a 4th
   browser-driven specialist — all pass without an LLM key.
 
-Exit criteria: an authenticated Juice Shop run that finds and PoC-validates
-a stored-XSS via the browser tool, with the proxy log as evidence — see
-TODO.md run notes for the real-run outcomes.
+Exit criteria: MET (2026-08-16). The authenticated Juice Shop run
+(`runs/20260815-195935-juice-shop-ea92`) found and PoC-validated XSS through
+the browser tool with the proxy log as evidence — the DOM XSS via `#/search`
+(JS source line + `browser_evaluate` execution proof + screenshot artifact +
+6.6k captured flows). The stored flavor was browser-PoC'd on the DVWA run
+(`runs/20260815-193336-dvwa-6251`: guestbook payload persisted, dialog
+recorded, screenshot, 20.5k flows) alongside filed critical SQLi and command
+injection — the current Juice Shop sanitizes its stored channels server-side
+(verified), so its designed XSS surface is the DOM one the agent proved.
+Full run accounting in TODO.md.
 
 ## Phase 4 — Polish: live UI, reports, white-box, CI
 

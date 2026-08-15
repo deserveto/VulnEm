@@ -337,7 +337,6 @@ def _parse_set_cookies(raw_response: str, url: str) -> list[dict[str, Any]]:
 def cookies_to_netscape(cookies: list[dict[str, Any]]) -> str:
     """Render cookies as a Netscape cookies.txt jar for curl."""
     lines = ["# Netscape HTTP Cookie File (vulnem authenticated session)"]
-    far_future = int(time.time()) + 86400
     for c in cookies:
         domain = (c.get("domain") or "").lstrip(".")
         include_sub = "TRUE" if domain and not domain.startswith(".") else "FALSE"
