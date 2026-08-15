@@ -215,7 +215,9 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
               budget: int | None = None, creds_path: str | None = None,
-              no_proxy: bool = False) -> int:
+              no_proxy: bool = False, ci: bool = False, fail_on: str = "info",
+              scope_mode: str = "full", diff_file: str | None = None,
+              source_dir: str | None = None) -> int:
     import asyncio as _aio
 
     from vulnem.auth import CredsConfig, CredsError
@@ -228,9 +230,28 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
         return 2
 
     isolated = settings.docker_network is not None
+    if ci:
+        settings.yes = True
     if not isolated and not _confirm_authorization(scope.host, yes=settings.yes or yes):
         console.print("[red]Authorization not confirmed. Aborting.[/red]")
         return 2
+
+    focus_text: str | None = None
+    if scope_mode == "diff":
+        from vulnem.diffs import load_focus
+
+        focus = load_focus(diff_file=diff_file,
+                           source_dir=Path(source_dir) if source_dir else None)
+        if focus is None or focus.is_empty():
+            console.print("[yellow]--scope-mode diff: no usable diff found "
+                          "(--diff-file or a git repo via --source) — running a "
+                          "full scan instead.[/yellow]")
+        else:
+            from vulnem.diffs import focus_directive
+
+            focus_text = focus_directive(focus)
+            console.print(f"[cyan]Diff focus:[/cyan] {len(focus.files)} files, "
+                          f"{len(focus.endpoints)} endpoints extracted")
 
     creds: CredsConfig | None = None
     if creds_path:
@@ -266,6 +287,10 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
                 "solo": solo,
                 "proxy": proxy is not None,
                 "creds": creds_path,
+                "ci": ci,
+                "fail_on": fail_on if ci else None,
+                "scope_mode": scope_mode,
+                "source": source_dir,
                 "started_at": utc_now_iso(),
                 "vulnem_version": __version__,
             },
@@ -282,7 +307,10 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
         f"Network: {settings.docker_network or '(default — internet reachable)'}\n"
         f"Proxy:  {proxy.name if proxy else 'disabled'}\n"
         f"Auth:   {'credentials file → session established pre-scan' if creds else 'unauthenticated'}\n"
-        f"Run dir: {run_dir}",
+        + (f"Source: {source_dir} (white-box)\n" if source_dir else "")
+        + (f"Scope:  diff-focused ({scope_mode})\n" if focus_text else "")
+        + (f"CI:     headless, fail-on={fail_on}\n" if ci else "")
+        + f"Run dir: {run_dir}",
         title="VulnEm scan", border_style="blue",
     ))
 
@@ -291,6 +319,7 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
         user=settings.sandbox_user,
         network=settings.docker_network,
         proxy_url=proxy.sandbox_proxy_url if proxy else None,
+        source_dir=source_dir,
     )
     try:
         sandbox.start()
@@ -304,17 +333,21 @@ def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
     try:
         result = _aio.run(run_scan(
             scope=scope, settings=settings, sandbox=sandbox, run_dir=run_dir,
-            solo=solo, on_event=_on_event, budget_turns=budget,
-            proxy=proxy, creds=creds,
+            solo=solo, on_event=None if ci else _on_event, budget_turns=budget,
+            proxy=proxy, creds=creds, focus=focus_text,
         ))
     finally:
         sandbox.stop()
         if proxy is not None:
             proxy.stop()
 
-    _write_report(run_dir, settings, scope, started_at, result)
-    # CI-friendly exit code: non-zero when findings exist.
-    return 1 if result.findings else 0
+    report = _write_report(run_dir, settings, scope, started_at, result)
+    from vulnem.ci import ci_exit_code, result_line
+
+    code = ci_exit_code(result.findings, fail_on)
+    if ci:
+        console.print(result_line(report, fail_on=fail_on, exit_code=code))
+    return code
 
 
 def _run_demo(settings: Settings, *, solo: bool = False, budget: int | None = None,
@@ -479,7 +512,10 @@ def cmd_scan(args: argparse.Namespace) -> int:
         settings.yes = True
     return _run_scan(settings, args.target, yes=args.yes,
                      solo=args.solo, budget=args.budget,
-                     creds_path=args.creds, no_proxy=args.no_proxy)
+                     creds_path=args.creds, no_proxy=args.no_proxy,
+                     ci=args.ci, fail_on=args.fail_on,
+                     scope_mode=args.scope_mode, diff_file=args.diff_file,
+                     source_dir=args.source)
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
@@ -603,6 +639,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("--no-proxy", action="store_true",
                         help="Disable the mitmproxy sidecar (drops network-layer scope "
                              "enforcement and traffic capture)")
+    p_scan.add_argument("--ci", action="store_true",
+                        help="Headless CI mode: no prompts, no live event stream, "
+                             "one VULNEM_RESULT summary line, exit 1 on findings")
+    p_scan.add_argument("--fail-on", choices=["critical", "high", "medium", "low", "info"],
+                        default="info",
+                        help="Exit non-zero only for findings at/above this severity "
+                             "(default: info — any finding fails)")
+    p_scan.add_argument("--scope-mode", choices=["full", "diff"], default="full",
+                        help="diff: PR-sized scan focused on files/endpoints from the "
+                             "PR diff (prompt-level narrowing; enforcement layers "
+                             "are never weakened)")
+    p_scan.add_argument("--diff-file", metavar="FILE",
+                        help="Unified diff to focus on with --scope-mode diff "
+                             "(default: git diff origin/main...HEAD via --source)")
+    p_scan.add_argument("--source", metavar="DIR",
+                        help="Target source directory — mounted read-only into the "
+                             "sandbox for white-box analysis (semgrep + code reading)")
     p_scan.add_argument("--yes", action="store_true",
                         help="Skip authorization confirmation (CI / owned assets)")
     p_scan.set_defaults(func=cmd_scan)

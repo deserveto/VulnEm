@@ -122,6 +122,7 @@ async def run_scan(
     resume_state: dict[str, Any] | None = None,
     proxy: Any | None = None,
     creds: Any | None = None,
+    focus: str | None = None,
 ) -> ScanResult:
     """Run one scan (solo or coordinated graph) to completion."""
     if resume_state is not None:
@@ -183,6 +184,7 @@ async def run_scan(
         "budget_turns": budget.max_turns,
         "proxy": proxy is not None,
         "authenticated": bool(auth_cookies),
+        "scope_mode": "diff" if focus else "full",
     })
 
     tasks: list[asyncio.Task] = []
@@ -262,7 +264,8 @@ async def run_scan(
             record,
             system_prompt=build_system_prompt(scope, max_turns=settings.max_turns,
                                               authenticated=bool(auth_cookies)),
-            initial_task=build_initial_task(scope, authenticated=bool(auth_cookies)),
+            initial_task=build_initial_task(scope, authenticated=bool(auth_cookies),
+                                            focus=focus),
             tool_names=SOLO_TOOLS,
             finish_tool=FINISH_TOOL,
         )
@@ -280,7 +283,7 @@ async def run_scan(
             system_prompt=build_root_prompt(
                 scope, max_turns=settings.max_turns, budget_turns=budget.max_turns
             ),
-            initial_task=build_root_initial_task(scope),
+            initial_task=build_root_initial_task(scope, focus=focus),
             tool_names=ROOT_TOOLS,
             finish_tool=FINISH_TOOL,
         )

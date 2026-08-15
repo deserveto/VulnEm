@@ -52,11 +52,13 @@ class Sandbox:
         network: str | None = None,
         name_prefix: str = "vulnem-sandbox",
         proxy_url: str | None = None,
+        source_dir: str | None = None,
     ) -> None:
         self._image = image
         self._user = user
         self._network = network
         self._proxy_url = proxy_url
+        self._source_dir = source_dir
         self._name = f"{name_prefix}-{uuid.uuid4().hex[:8]}"
         self._client: docker.DockerClient | None = None
         self._container = None
@@ -65,6 +67,11 @@ class Sandbox:
     def proxy_url(self) -> str | None:
         """The HTTP proxy every sandbox client is pointed at (or None)."""
         return self._proxy_url
+
+    @property
+    def source_mount(self) -> str | None:
+        """In-sandbox path where --source is mounted read-only (or None)."""
+        return f"/home/{self._user}/source" if self._source_dir else None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -92,6 +99,14 @@ class Sandbox:
         }
         if self._network:
             kwargs["network"] = self._network
+        if self._source_dir:
+            # White-box mode: the target's source rides along read-only, so
+            # agents can read code and run semgrep but never modify the repo.
+            src = Path(self._source_dir).resolve()
+            if not src.is_dir():
+                raise SandboxError(f"--source directory not found: {src}")
+            kwargs["volumes"] = {str(src): {
+                "bind": f"/home/{self._user}/source", "mode": "ro"}}
         logger.info("starting sandbox container %s (image=%s network=%s)",
                     self._name, self._image, self._network or "default")
         self._container = self._client.containers.run(self._image, **kwargs)

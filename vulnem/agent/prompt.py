@@ -246,7 +246,8 @@ def build_root_prompt(
     )
 
 
-def build_initial_task(scope: Scope, *, authenticated: bool = False) -> str:
+def build_initial_task(scope: Scope, *, authenticated: bool = False,
+                       focus: str | None = None) -> str:
     task = (
         f"Begin an authorized security assessment of {scope.target_url}.\n"
         "Start with recon and mapping, read the `recon` skill, then test the "
@@ -260,14 +261,19 @@ def build_initial_task(scope: Scope, *, authenticated: bool = False) -> str:
             "auth, `-H @/home/pentester/.vulnem/auth-header.txt`). Use it — do not "
             "log in again."
         )
+    if focus:
+        task += f"\n\n{focus}"
     return task
 
 
-def build_root_initial_task(scope: Scope) -> str:
-    return (
+def build_root_initial_task(scope: Scope, *, focus: str | None = None) -> str:
+    task = (
         f"Orchestrate an authorized security assessment of {scope.target_url}.\n"
         "Read the `coordination/root_agent` skill, decompose the assessment "
         "into specialist missions, create your specialists in parallel, wait "
         "for their reports, follow up on promising leads within budget, then "
         "finish with an executive assessment via finish_scan."
     )
+    if focus:
+        task += f"\n\n{focus}"
+    return task

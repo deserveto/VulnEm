@@ -285,6 +285,21 @@ def _verify(run_dir: Path) -> list[str]:
     if not evidence_log.is_file() or len(evidence_log.read_text(encoding="utf-8").splitlines()) < 3:
         problems.append("proxy-flows.jsonl evidence snapshot missing or thin")
 
+    # -- Phase 4: CI contract artifacts ------------------------------------
+    try:
+        import jsonschema  # noqa: F401  (present via dev deps; optional here)
+
+        sarif = json.loads((run_dir / "findings.sarif").read_text(encoding="utf-8"))
+        n_results = len(sarif["runs"][0]["results"])
+        if n_results < 1:
+            problems.append("findings.sarif carries no results (CI upload would be empty)")
+    except FileNotFoundError:
+        problems.append("findings.sarif missing (CI report export not wired)")
+    except ImportError:  # pragma: no cover - jsonschema optional at runtime
+        pass
+    if not (run_dir / "report.pdf").is_file():
+        problems.append("report.pdf missing (PDF export not wired)")
+
     attributed = {e["agent_ctx"]["name"] for e in transcript if e["type"] == "tool_call"
                   and "agent_ctx" in e}
     if not {"root", "sqli-search"} <= attributed:
@@ -323,8 +338,11 @@ def main() -> int:
         return 2
     problems = _verify(run_dirs[-1])
     console.print(f"\n[bold]mock e2e verification[/bold] ({time.time() - started:.0f}s):")
-    if problems or rc not in (0, 1):  # rc=1 means findings found (expected)
-        for p in problems or [f"demo exit code {rc}"]:
+    # The scripted run always files findings, so the scan must exit 1
+    # (fail-on-findings) — the Phase 4 CI contract. 0 means findings were
+    # lost; 2+ means an operational failure.
+    if problems or rc != 1:
+        for p in problems or [f"demo exit code {rc} (want 1 = findings found)"]:
             console.print(f"  [red]FAIL[/red] {p}")
         return 2
     console.print("  [green]PASS[/green] root spawned 4 specialists in parallel (incl. browser-driven)")
@@ -333,6 +351,7 @@ def main() -> int:
     console.print("  [green]PASS[/green] transcript carries per-agent attribution")
     console.print("  [green]PASS[/green] real Chromium driven via browser tools; screenshot artifact persisted")
     console.print("  [green]PASS[/green] proxy sidecar captured flows, enabled replay, snapshot saved")
+    console.print("  [green]PASS[/green] SARIF + PDF exported; scan exited 1 (CI fail-on-findings)")
     console.print(f"  run dir: {run_dirs[-1]}")
     return 0
 
