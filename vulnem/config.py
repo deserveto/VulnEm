@@ -15,8 +15,11 @@ DEFAULT_LLM = "openai/gpt-5"
 SANDBOX_IMAGE = "vulnem-sandbox:latest"
 SANDBOX_USER = "pentester"
 DEFAULT_MAX_TURNS = 60
+DEFAULT_CHILD_MAX_TURNS = 30
+DEFAULT_MAX_AGENTS = 8
 DEFAULT_CMD_TIMEOUT = 120
 DEFAULT_MAX_TOTAL_TOKENS = 4_000_000
+DEFAULT_MAX_CONCURRENT_EXEC = 4
 OUTPUT_TRUNCATE_CHARS = 12_000
 
 
@@ -26,8 +29,11 @@ class Settings:
 
     model: str = DEFAULT_LLM
     max_turns: int = DEFAULT_MAX_TURNS
+    child_max_turns: int = DEFAULT_CHILD_MAX_TURNS
+    max_agents: int = DEFAULT_MAX_AGENTS
     cmd_timeout: int = DEFAULT_CMD_TIMEOUT
     max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS
+    max_concurrent_exec: int = DEFAULT_MAX_CONCURRENT_EXEC
     sandbox_image: str = SANDBOX_IMAGE
     sandbox_user: str = SANDBOX_USER
     docker_network: str | None = None
@@ -43,9 +49,16 @@ class Settings:
         return cls(
             model=os.environ.get("VULNEM_LLM", DEFAULT_LLM),
             max_turns=int(os.environ.get("VULNEM_MAX_TURNS", DEFAULT_MAX_TURNS)),
+            child_max_turns=int(
+                os.environ.get("VULNEM_CHILD_MAX_TURNS", DEFAULT_CHILD_MAX_TURNS)
+            ),
+            max_agents=int(os.environ.get("VULNEM_MAX_AGENTS", DEFAULT_MAX_AGENTS)),
             cmd_timeout=int(os.environ.get("VULNEM_CMD_TIMEOUT", DEFAULT_CMD_TIMEOUT)),
             max_total_tokens=int(
                 os.environ.get("VULNEM_MAX_TOTAL_TOKENS", DEFAULT_MAX_TOTAL_TOKENS)
+            ),
+            max_concurrent_exec=int(
+                os.environ.get("VULNEM_MAX_CONCURRENT_EXEC", DEFAULT_MAX_CONCURRENT_EXEC)
             ),
             sandbox_image=os.environ.get("VULNEM_SANDBOX_IMAGE", SANDBOX_IMAGE),
             docker_network=os.environ.get("VULNEM_DOCKER_NETWORK") or None,

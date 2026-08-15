@@ -44,8 +44,12 @@ class ToolContext:
 
 # -- OpenAI-format tool schemas ------------------------------------------------
 
-TOOL_SCHEMAS: list[dict[str, Any]] = [
-    {
+# Hands-on tools: every tool whose handler is a plain sync function run in a
+# worker thread (graph tools live in vulnem/agents/graph_tools.py).
+HANDS_ON_TOOL_NAMES = {"exec_command", "read_skill", "report_finding", "think"}
+
+SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
+    "exec_command": {
         "type": "function",
         "function": {
             "name": "exec_command",
@@ -71,7 +75,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
-    {
+    "read_skill": {
         "type": "function",
         "function": {
             "name": "read_skill",
@@ -93,7 +97,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
-    {
+    "report_finding": {
         "type": "function",
         "function": {
             "name": "report_finding",
@@ -148,7 +152,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
-    {
+    "think": {
         "type": "function",
         "function": {
             "name": "think",
@@ -167,31 +171,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": FINISH_TOOL,
-            "description": (
-                "End the scan. Call when testing is complete (or you are "
-                "confident no more findings are reachable within budget). "
-                "Provide an executive summary of what was tested, what was "
-                "found, coverage gaps, and overall posture. This is the ONLY "
-                "way to end the scan."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": {
-                        "type": "string",
-                        "description": "Executive summary in markdown.",
-                    },
-                },
-                "required": ["summary"],
-                "additionalProperties": False,
-            },
-        },
-    },
-]
+}
+
+# Kept for Phase 1 compatibility (solo toolset without lifecycle tools).
+TOOL_SCHEMAS: list[dict[str, Any]] = list(SCHEMA_BY_NAME.values())
 
 
 # -- Implementations -----------------------------------------------------------

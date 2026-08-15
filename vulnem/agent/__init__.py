@@ -1,5 +1,3 @@
-"""Agent loop: LLM + tools + lifecycle, hand-rolled on litellm."""
+"""Agent prompts and tools; the loop itself lives in vulnem.agents."""
 
-from vulnem.agent.loop import ScanResult, run_scan_agent
-
-__all__ = ["ScanResult", "run_scan_agent"]
+__all__ = ["prompt", "tools"]

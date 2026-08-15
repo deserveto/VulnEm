@@ -14,11 +14,11 @@ from rich.console import Console
 from rich.panel import Panel
 
 from vulnem import __version__
-from vulnem.agent import run_scan_agent
 from vulnem.agent.tools import _list_skills
 from vulnem.config import Settings
 from vulnem.report.findings import FindingsReport, utc_now_iso
 from vulnem.sandbox import Sandbox, SandboxError, build_image
+from vulnem.scan import load_resume_state, read_run_config, run_scan
 from vulnem.scope import Scope, ScopeError
 
 console = Console()
@@ -26,6 +26,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 JUICE_SHOP_IMAGE = "bkimminich/juice-shop:latest"
 
 SEVERITY_COLORS = {"CRITICAL": "red", "HIGH": "red", "MEDIUM": "yellow", "LOW": "cyan", "INFO": "cyan"}
+STATUS_COLORS = {
+    "running": "green", "waiting": "yellow", "completed": "bright_green",
+    "stopped": "cyan", "crashed": "red", "failed": "red",
+}
 
 
 def _resolve_paths(settings: Settings) -> Settings:
@@ -80,25 +84,51 @@ def _shorten(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _agent_tag(event: dict) -> str:
+    ctx = event.get("agent_ctx") or {}
+    name = ctx.get("name")
+    if not name:
+        return ""
+    role = ctx.get("role", "")
+    color = "magenta" if role == "root" else ("blue" if role == "solo" else "cyan")
+    return f"[{color}][{name}][/{color}] "
+
+
 def _on_event(event: dict) -> None:
     kind = event.get("type")
+    tag = _agent_tag(event)
     if kind == "assistant_text":
-        console.print(f"[dim]{_shorten(event['text'], 500)}[/dim]\n")
+        console.print(f"{tag}[dim]{_shorten(event['text'], 400)}[/dim]\n")
     elif kind == "tool_call":
         name = event.get("name", "?")
         args = event.get("args", {})
         if name == "exec_command":
-            console.print(f"[cyan]▸ exec[/cyan] [white]{_shorten(args.get('command', ''), 140)}[/white]")
+            console.print(f"{tag}[cyan]▸ exec[/cyan] [white]{_shorten(args.get('command', ''), 130)}[/white]")
         elif name == "think":
-            console.print(f"[cyan]▸ think[/cyan] [dim]{_shorten(args.get('thoughts', ''), 100)}[/dim]")
+            console.print(f"{tag}[cyan]▸ think[/cyan] [dim]{_shorten(args.get('thoughts', ''), 90)}[/dim]")
         elif name == "report_finding":
             sev = str(args.get("severity", "?")).upper()
             color = SEVERITY_COLORS.get(sev, "green")
-            console.print(f"[{color}]▸ finding [{sev}][/{color}] {args.get('title', '')}")
+            console.print(f"{tag}[{color}]▸ finding [{sev}][/{color}] {args.get('title', '')}")
         elif name == "read_skill":
-            console.print(f"[cyan]▸ skill[/cyan] {args.get('name', '(list)')}")
-        elif name == "finish_scan":
-            console.print("[green]▸ finish_scan[/green]")
+            console.print(f"{tag}[cyan]▸ skill[/cyan] {args.get('name', '(list)')}")
+        elif name == "create_agent":
+            console.print(f"{tag}[green]▸ create_agent[/green] {args.get('name', '?')} — {_shorten(args.get('objective', ''), 110)}")
+        elif name == "wait_for_agents":
+            console.print(f"{tag}[yellow]▸ wait_for_agents[/yellow] {args.get('agent_ids') or '(all children)'}")
+        elif name in {"finish_scan", "agent_finish"}:
+            console.print(f"{tag}[green]▸ {name}[/green]")
+        else:
+            console.print(f"{tag}[cyan]▸ {name}[/cyan]")
+    elif kind == "agent_created":
+        console.print(f"[green]+ agent[/green] {event.get('agent')} ({event.get('agent_id')}) spawned by {event.get('parent_id', 'operator')}")
+    elif kind == "agent_status":
+        to = str(event.get("to", "?"))
+        color = STATUS_COLORS.get(to, "white")
+        console.print(f"[{color}]{event.get('agent')} -> {to}[/{color}]" +
+                      (f" [dim]({event.get('reason')})[/dim]" if event.get("reason") else ""))
+    elif kind == "agent_message":
+        console.print(f"[dim]msg {event.get('from')} -> {event.get('to')}: {_shorten(event.get('preview', ''), 100)}[/dim]")
     elif kind == "scan_end":
         console.print(
             f"\n[bold]Scan ended[/bold] ({event.get('stop_reason')}) — "
@@ -107,7 +137,30 @@ def _on_event(event: dict) -> None:
         )
 
 
-def _run_scan(settings: Settings, target: str, *, yes: bool) -> int:
+def _write_report(run_dir: Path, settings: Settings, scope: Scope,
+                  started_at: str, result) -> FindingsReport:
+    report = FindingsReport(
+        target=scope.target_url,
+        started_at=started_at,
+        finished_at=utc_now_iso(),
+        model=settings.model,
+        summary=result.summary or "(no summary)",
+        findings=result.findings,
+    )
+    report.write(run_dir)
+    counts = report.counts()
+    parts = [f"{sev}: {n}" for sev, n in counts.items() if n]
+    console.print("\n[bold]Findings:[/bold] " + (", ".join(parts) if parts else "none"))
+    console.print(f"Report:     {run_dir / 'report.md'}")
+    console.print(f"Findings:   {run_dir / 'findings.json'}")
+    console.print(f"Transcript: {run_dir / 'transcript.jsonl'}")
+    return report
+
+
+def _run_scan(settings: Settings, target: str, *, yes: bool, solo: bool = False,
+              budget: int | None = None) -> int:
+    import asyncio as _aio
+
     try:
         scope = Scope.from_target(target)
     except ScopeError as exc:
@@ -128,6 +181,8 @@ def _run_scan(settings: Settings, target: str, *, yes: bool) -> int:
                 "model": settings.model,
                 "network": settings.docker_network,
                 "max_turns": settings.max_turns,
+                "scan_budget_turns": budget,
+                "solo": solo,
                 "started_at": utc_now_iso(),
                 "vulnem_version": __version__,
             },
@@ -135,11 +190,12 @@ def _run_scan(settings: Settings, target: str, *, yes: bool) -> int:
         ),
         encoding="utf-8",
     )
-    transcript = run_dir / "transcript.jsonl"
 
+    mode = "solo agent" if solo else "root + specialists (graph)"
     console.print(Panel.fit(
         f"Target: [bold]{scope.target_url}[/bold]\n"
         f"Model:  {settings.model}\n"
+        f"Mode:   {mode}\n"
         f"Network: {settings.docker_network or '(default — internet reachable)'}\n"
         f"Run dir: {run_dir}",
         title="VulnEm scan", border_style="blue",
@@ -158,37 +214,19 @@ def _run_scan(settings: Settings, target: str, *, yes: bool) -> int:
 
     started_at = utc_now_iso()
     try:
-        result = run_scan_agent(
-            scope=scope,
-            settings=settings,
-            sandbox=sandbox,
-            transcript_path=transcript,
-            on_event=_on_event,
-        )
+        result = _aio.run(run_scan(
+            scope=scope, settings=settings, sandbox=sandbox, run_dir=run_dir,
+            solo=solo, on_event=_on_event, budget_turns=budget,
+        ))
     finally:
         sandbox.stop()
 
-    report = FindingsReport(
-        target=scope.target_url,
-        started_at=started_at,
-        finished_at=utc_now_iso(),
-        model=settings.model,
-        summary=result.summary or "(no summary)",
-        findings=result.findings,
-    )
-    json_path, md_path = report.write(run_dir)
-
-    counts = report.counts()
-    parts = [f"{sev}: {n}" for sev, n in counts.items() if n]
-    console.print("\n[bold]Findings:[/bold] " + (", ".join(parts) if parts else "none"))
-    console.print(f"Report:     {md_path}")
-    console.print(f"Findings:   {json_path}")
-    console.print(f"Transcript: {transcript}")
+    _write_report(run_dir, settings, scope, started_at, result)
     # CI-friendly exit code: non-zero when findings exist.
     return 1 if result.findings else 0
 
 
-def _run_demo(settings: Settings) -> int:
+def _run_demo(settings: Settings, *, solo: bool = False, budget: int | None = None) -> int:
     """Spin up an isolated Juice Shop lab, scan it, tear it down."""
     import docker
 
@@ -227,7 +265,7 @@ def _run_demo(settings: Settings) -> int:
         console.print("  target is up. starting scan.\n")
 
         settings.docker_network = net_name
-        return _run_scan(settings, target_url, yes=True)
+        return _run_scan(settings, target_url, yes=True, solo=solo, budget=budget)
     except SandboxError as exc:
         console.print(f"[red]Sandbox error:[/red] {exc}")
         return 2
@@ -246,6 +284,63 @@ def _run_demo(settings: Settings) -> int:
         console.print(f"[dim]Lab torn down (network {net_name}).[/dim]")
 
 
+def _run_resume(settings: Settings, run_dir: Path, *, model: str | None = None,
+                extend_turns: int | None = None) -> int:
+    import asyncio as _aio
+
+    try:
+        state = load_resume_state(run_dir)
+        config = read_run_config(run_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        console.print(f"[red]Cannot resume:[/red] {exc}")
+        return 2
+
+    try:
+        scope = Scope.from_target(config["target"])
+    except (KeyError, ScopeError) as exc:
+        console.print(f"[red]Bad target in run config:[/red] {exc}")
+        return 2
+
+    if model:
+        settings.model = model
+    settings.docker_network = config.get("network")
+    if extend_turns:
+        budget = state.get("budget", {})
+        budget["max_turns"] = (budget.get("max_turns") or 0) + extend_turns
+        console.print(f"[green]Scan budget extended by {extend_turns} turns.[/green]")
+
+    console.print(Panel.fit(
+        f"Resuming: [bold]{scope.target_url}[/bold]\n"
+        f"Run dir:  {run_dir}\n"
+        f"Model:    {settings.model}",
+        title="VulnEm resume", border_style="blue",
+    ))
+
+    sandbox = Sandbox(
+        image=settings.sandbox_image,
+        user=settings.sandbox_user,
+        network=settings.docker_network,
+    )
+    try:
+        sandbox.start()
+    except SandboxError as exc:
+        console.print(f"[red]Sandbox error:[/red] {exc} (is the target's network still up?)")
+        return 2
+
+    try:
+        result = _aio.run(run_scan(
+            scope=scope, settings=settings, sandbox=sandbox, run_dir=run_dir,
+            solo=config.get("solo", False), on_event=_on_event,
+            resume_state=state,
+        ))
+    finally:
+        sandbox.stop()
+
+    started_at = config.get("started_at", utc_now_iso())
+    _write_report(run_dir, settings, scope, started_at, result)
+    return 1 if result.findings else 0
+
+
 def cmd_build(args: argparse.Namespace) -> int:
     build_image(dockerfile_dir=PROJECT_ROOT / "containers", tag=args.tag)
     return 0
@@ -259,9 +354,12 @@ def cmd_scan(args: argparse.Namespace) -> int:
         settings.model = args.model
     if args.max_turns:
         settings.max_turns = args.max_turns
+    if args.max_agents:
+        settings.max_agents = args.max_agents
     if args.yes:
         settings.yes = True
-    return _run_scan(settings, args.target, yes=args.yes)
+    return _run_scan(settings, args.target, yes=args.yes,
+                     solo=args.solo, budget=args.budget)
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
@@ -270,7 +368,15 @@ def cmd_demo(args: argparse.Namespace) -> int:
         settings.model = args.model
     if args.max_turns:
         settings.max_turns = args.max_turns
-    return _run_demo(settings)
+    if args.max_agents:
+        settings.max_agents = args.max_agents
+    return _run_demo(settings, solo=args.solo, budget=args.budget)
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    settings = _resolve_paths(Settings.load(project_root=PROJECT_ROOT))
+    return _run_resume(settings, Path(args.run_dir).resolve(),
+                       model=args.model, extend_turns=args.extend_turns)
 
 
 def cmd_skills(_args: argparse.Namespace) -> int:
@@ -339,19 +445,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--tag", default=None, help="Image tag (default: vulnem-sandbox:latest)")
     p_build.set_defaults(func=cmd_build)
 
-    p_scan = sub.add_parser("scan", help="Scan an authorized target")
+    p_scan = sub.add_parser("scan", help="Scan an authorized target (multi-agent graph)")
     p_scan.add_argument("target", help="Target URL (e.g. http://juice-shop:3000)")
     p_scan.add_argument("--network", help="Attach sandbox to this Docker network (lab isolation)")
     p_scan.add_argument("--model", help="LLM in litellm format (overrides VULNEM_LLM)")
-    p_scan.add_argument("--max-turns", type=int, help="Agent turn cap (default 60)")
+    p_scan.add_argument("--max-turns", type=int, help="Turn cap per agent (default 60)")
+    p_scan.add_argument("--budget", type=int,
+                        help="Scan-wide turn budget across all agents (default 4x max-turns)")
+    p_scan.add_argument("--max-agents", type=int, help="Agent cap for the graph (default 8)")
+    p_scan.add_argument("--solo", action="store_true",
+                        help="Phase 1 single-agent mode (no coordinator graph)")
     p_scan.add_argument("--yes", action="store_true",
                         help="Skip authorization confirmation (CI / owned assets)")
     p_scan.set_defaults(func=cmd_scan)
 
-    p_demo = sub.add_parser("demo", help="One-command lab: Juice Shop + full scan")
+    p_demo = sub.add_parser("demo", help="One-command lab: Juice Shop + full multi-agent scan")
     p_demo.add_argument("--model", help="LLM in litellm format")
     p_demo.add_argument("--max-turns", type=int)
+    p_demo.add_argument("--budget", type=int, help="Scan-wide turn budget")
+    p_demo.add_argument("--max-agents", type=int)
+    p_demo.add_argument("--solo", action="store_true", help="Phase 1 single-agent mode")
     p_demo.set_defaults(func=cmd_demo)
+
+    p_resume = sub.add_parser("resume", help="Resume an interrupted scan from its snapshot")
+    p_resume.add_argument("run_dir", help="Run directory (e.g. runs/20260816-...-juice-shop-ab12)")
+    p_resume.add_argument("--model", help="Override the LLM")
+    p_resume.add_argument("--extend-turns", type=int,
+                          help="Top up the scan-wide turn budget before resuming")
+    p_resume.set_defaults(func=cmd_resume)
 
     p_skills = sub.add_parser("skills", help="List skill packs")
     p_skills.set_defaults(func=cmd_skills)
@@ -379,7 +500,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except KeyboardInterrupt:
-        console.print("\n[yellow]Interrupted.[/yellow]")
+        console.print("\n[yellow]Interrupted.[/yellow] "
+                      "State was snapshotted — resume with `vulnem resume <run_dir>`.")
         return 130
 
 
