@@ -1,0 +1,287 @@
+"""Tools the scan agent can call, plus the dispatcher that runs them."""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from vulnem.config import OUTPUT_TRUNCATE_CHARS, Settings
+from vulnem.report.findings import Finding, dedupe
+from vulnem.sandbox import Sandbox
+
+logger = logging.getLogger(__name__)
+
+FINISH_TOOL = "finish_scan"
+
+
+def truncate(text: str, limit: int = OUTPUT_TRUNCATE_CHARS) -> str:
+    """Keep head and tail of long tool output so the model sees both."""
+    if len(text) <= limit:
+        return text
+    head = text[: limit // 2]
+    tail = text[-(limit // 2) :]
+    omitted = len(text) - limit
+    return f"{head}\n... [{omitted} chars truncated] ...\n{tail}"
+
+
+@dataclass(slots=True)
+class ToolContext:
+    """Everything tool implementations need, owned by the agent loop."""
+
+    settings: Settings
+    sandbox: Sandbox
+    scope_host: str
+    findings: list[Finding] = field(default_factory=list)
+    transcript_events: list[dict[str, Any]] = field(default_factory=list)
+
+    def record(self, event: dict[str, Any]) -> None:
+        self.transcript_events.append(event)
+
+
+# -- OpenAI-format tool schemas ------------------------------------------------
+
+TOOL_SCHEMAS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "exec_command",
+            "description": (
+                "Run a shell command inside the isolated sandbox and return "
+                "exit code, stdout, and stderr. Non-interactive tools only; "
+                "long output is truncated (write to a file and grep to narrow)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The bash command to execute.",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": f"Optional timeout in seconds (default {120}, max 600).",
+                    },
+                },
+                "required": ["command"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_skill",
+            "description": (
+                "Load a methodology knowledge pack into context. Call with no "
+                "name to list available skills. Read `recon` before testing; "
+                "read the class-specific skill before testing that class."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Skill name (from the list), or omit to list skills.",
+                    },
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "report_finding",
+            "description": (
+                "File a VALIDATED vulnerability finding. Only call this after "
+                "reproducing the issue and capturing evidence. PoC must let a "
+                "human reproduce it step by step; evidence must contain the "
+                "actual command and response output."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short, specific title."},
+                    "severity": {
+                        "type": "string",
+                        "enum": ["critical", "high", "medium", "low", "info"],
+                    },
+                    "description": {"type": "string"},
+                    "evidence": {"type": "string"},
+                    "poc": {"type": "string"},
+                    "remediation": {"type": "string"},
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    },
+                    "cwe": {
+                        "type": "string",
+                        "description": "Optional CWE id, e.g. CWE-89.",
+                    },
+                    "url": {"type": "string", "description": "Optional affected URL."},
+                },
+                "required": [
+                    "title",
+                    "severity",
+                    "description",
+                    "evidence",
+                    "poc",
+                    "remediation",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "think",
+            "description": (
+                "Private scratchpad for planning. Use it to lay out the next "
+                "hypothesis, interpret confusing output, or decide priorities. "
+                "Cheap; use freely instead of long plain-text narration."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thoughts": {"type": "string"},
+                },
+                "required": ["thoughts"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": FINISH_TOOL,
+            "description": (
+                "End the scan. Call when testing is complete (or you are "
+                "confident no more findings are reachable within budget). "
+                "Provide an executive summary of what was tested, what was "
+                "found, coverage gaps, and overall posture. This is the ONLY "
+                "way to end the scan."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "Executive summary in markdown.",
+                    },
+                },
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+        },
+    },
+]
+
+
+# -- Implementations -----------------------------------------------------------
+
+
+def _list_skills(skills_dir: Path) -> list[dict[str, str]]:
+    packs: list[dict[str, str]] = []
+    if not skills_dir.is_dir():
+        return packs
+    for path in sorted(skills_dir.glob("*.md")):
+        description = ""
+        text = path.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            frontmatter, _, _ = text[3:].partition("---")
+            for line in frontmatter.splitlines():
+                if line.lower().startswith("description:"):
+                    description = line.partition(":")[2].strip()
+                    break
+        packs.append({"name": path.stem, "description": description})
+    return packs
+
+
+def _tool_exec_command(ctx: ToolContext, args: dict[str, Any]) -> str:
+    command = str(args.get("command", "")).strip()
+    if not command:
+        return json.dumps({"exit_code": 2, "stdout": "", "stderr": "empty command"})
+    timeout = max(1, min(int(args.get("timeout") or 120), 600))
+    res = ctx.sandbox.exec(command, timeout=timeout)
+    payload = {
+        "exit_code": res.exit_code,
+        "stdout": truncate(res.stdout),
+        "stderr": truncate(res.stderr),
+        "duration_s": round(res.duration, 1),
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _tool_read_skill(ctx: ToolContext, args: dict[str, Any]) -> str:
+    name = str(args.get("name") or "").strip()
+    packs = _list_skills(ctx.settings.skills_dir)
+    if not name:
+        listing = "\n".join(f"- {p['name']}: {p['description']}" for p in packs)
+        return f"Available skills:\n{listing or '(none found)'}"
+    safe = Path(name).name  # no traversal
+    path = ctx.settings.skills_dir / f"{safe}.md"
+    if not path.is_file():
+        return f"Skill '{safe}' not found. List skills by calling read_skill with no name."
+    return truncate(path.read_text(encoding="utf-8"), 24_000)
+
+
+def _tool_report_finding(ctx: ToolContext, args: dict[str, Any]) -> str:
+    try:
+        finding = Finding(
+            title=str(args["title"]),
+            severity=str(args["severity"]),
+            description=str(args["description"]),
+            evidence=str(args["evidence"]),
+            poc=str(args["poc"]),
+            remediation=str(args["remediation"]),
+            confidence=str(args.get("confidence") or "high"),
+            cwe=args.get("cwe"),
+            url=args.get("url"),
+        )
+    except (KeyError, ValueError) as exc:
+        return json.dumps({"ok": False, "error": f"invalid finding: {exc}"})
+    finding.id = f"VULN-{len(ctx.findings) + 1:03d}"
+    ctx.findings.append(finding)
+    logger.info("finding reported: [%s] %s", finding.severity, finding.title)
+    return json.dumps(
+        {"ok": True, "id": finding.id, "total_findings": len(ctx.findings)},
+    )
+
+
+def _tool_think(_ctx: ToolContext, args: dict[str, Any]) -> str:
+    thoughts = str(args.get("thoughts") or "")
+    return json.dumps({"ok": True, "note": "recorded", "chars": len(thoughts)})
+
+
+def _tool_finish(ctx: ToolContext, args: dict[str, Any]) -> str:
+    summary = str(args.get("summary") or "(no summary provided)")
+    ctx.record({"type": "finish", "summary": summary})
+    return json.dumps({"ok": True, "note": "scan finishing"})
+
+
+def dispatch_tool(name: str, args: dict[str, Any], ctx: ToolContext) -> str:
+    """Run one tool call; always returns a JSON string for the model."""
+    handlers = {
+        "exec_command": _tool_exec_command,
+        "read_skill": _tool_read_skill,
+        "report_finding": _tool_report_finding,
+        "think": _tool_think,
+        FINISH_TOOL: _tool_finish,
+    }
+    handler = handlers.get(name)
+    if handler is None:
+        return json.dumps({"ok": False, "error": f"unknown tool {name!r}"})
+    try:
+        return handler(ctx, args)
+    except Exception as exc:  # tool failures go back to the model, never crash the loop
+        logger.exception("tool %s failed", name)
+        return json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
+def final_findings(ctx: ToolContext) -> list[Finding]:
+    return dedupe(ctx.findings)

@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# VulnEm agent sandbox — Debian + pentest tooling, non-root user.
+# Everything the agent executes runs inside this container, never on the host.
+# ---------------------------------------------------------------------------
+
+# Builder stage: compile Go tools here so the Go toolchain never reaches the
+# runtime image (saves ~1GB). Floating `golang:bookworm` because projectdiscovery
+# tools regularly require the newest Go toolchain. Each tool gets its own RUN
+# layer (a failed build resumes from the last success) and GOMAXPROCS is capped
+# so parallel compilation cannot OOM the Docker VM.
+FROM golang:bookworm AS builder
+
+ENV GOBIN=/out/bin GOMAXPROCS=2
+RUN mkdir -p /out/bin
+RUN go install -v github.com/ffuf/ffuf/v2@latest
+RUN go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+RUN go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+RUN go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+RUN go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+
+# Runtime stage
+FROM debian:bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl wget unzip git \
+      jq ripgrep file xxd less procps net-tools iputils-ping \
+      dnsutils netcat-traditional \
+      nmap sqlmap whatweb \
+      perl \
+      python3 python3-pip \
+      sudo vim-tiny && \
+    rm -rf /var/lib/apt/lists/*
+
+# nikto is not in Debian repos (Kali-only); upstream is a plain Perl script.
+RUN git clone --depth 1 https://github.com/sullo/nikto /opt/nikto && \
+    ln -s /opt/nikto/program/nikto.pl /usr/local/bin/nikto
+
+# Python libs agents commonly need for PoCs (stdlib-only also works).
+RUN pip3 install --break-system-packages --no-cache-dir requests
+
+COPY --from=builder /out/bin/ /usr/local/bin/
+
+# Non-root operator with passwordless sudo (some tools insist on it).
+RUN useradd -m -s /bin/bash pentester && \
+    echo "pentester ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/pentester && \
+    chmod 0440 /etc/sudoers.d/pentester && \
+    mkdir -p /home/pentester/workspace /usr/share/wordlists && \
+    chown -R pentester:pentester /home/pentester/workspace
+
+# Bake nuclei templates so the sandbox works with no internet access.
+RUN su - pentester -c 'nuclei -update-templates' || true
+
+# Common content-discovery wordlists for ffuf (build-time download, baked in).
+RUN curl -sfL https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/common.txt \
+      -o /usr/share/wordlists/common.txt || true && \
+    curl -sfL https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-medium-directories.txt \
+      -o /usr/share/wordlists/raft-medium-directories.txt || true
+
+USER pentester
+WORKDIR /home/pentester/workspace
+
+# Kept alive by the runner via `sleep infinity`; agent drives it with exec.
+CMD ["sleep", "infinity"]
