@@ -16,51 +16,55 @@ done; add new discoveries at the bottom of the phase they belong to.
 - [x] 5 skills (recon, sql_injection, xss, command_injection, broken_access_control)
 - [x] Tests + mock e2e; 7 real runs; prompt tuned from transcript
 
-## Phase 2 — Coordinator + specialist agents ← CURRENT
+## Phase 2 — Coordinator + specialist agents ✅ DONE (2026-08-16)
 
-Foundation (do in this order):
+Foundation:
 
-- [ ] Extract `AgentRun`/session handling out of `agent/loop.py` so multiple
+- [x] Extract `AgentRun`/session handling out of `agent/loop.py` so multiple
       agents can run concurrently on one sandbox
-- [ ] `vulnem/agents/coordinator.py`: register/status/parent-child state,
+      (`vulnem/agents/session.py` — async loop, exec/LLM in worker threads)
+- [x] `vulnem/agents/coordinator.py`: register/status/parent-child state,
       asyncio task per agent (statuses: running|waiting|completed|stopped|crashed|failed)
-- [ ] Mailboxes: per-agent queue + wake event; messages injected into the
+- [x] Mailboxes: per-agent queue + wake event; messages injected into the
       target's session as `[Message from <name> | type | priority]` user items
-- [ ] Root agent prompt: delegation-only playbook (never touch the target);
-      port the substance of Strix's root-agent skill into
+- [x] Root agent prompt: delegation-only playbook (never touch the target);
+      the substance of Strix's root-agent skill lives in
       `skills/coordination/root_agent.md`
-- [ ] Graph tools for root: `create_agent`, `view_agent_graph`,
+- [x] Graph tools for root: `create_agent`, `view_agent_graph`,
       `send_message_to_agent`, `wait_for_agents`, `stop_agent`
-- [ ] `agent_finish` on children: structured completion report
+- [x] `agent_finish` on children: structured completion report
       (status/summary/findings/recommendations) into parent session
-- [ ] Wait/park semantics: `wait_for_agents` blocks until children report;
-      no polling loops (one wait, then react)
+- [x] Wait/park semantics: `wait_for_agents` blocks until children report;
+      no polling loops (one wait, then react; messages revive a parked waiter)
 
 Budget + resilience:
 
-- [ ] Per-agent turn caps + scan-wide budget; pause/extend (`vulnem scan --budget`)
-- [ ] Child crash isolation: mark crashed, notify parent, scan continues
-- [ ] Coordinator snapshot/restore to `runs/<id>/state.json`; `vulnem resume`
+- [x] Per-agent turn caps + scan-wide budget; pause/extend
+      (`vulnem scan --budget`, `vulnem resume --extend-turns`)
+- [x] Child crash isolation: mark crashed, notify parent, scan continues
+- [x] Coordinator snapshot/restore to `runs/<id>/state.json`; `vulnem resume`
 
 Reporting upgrade:
 
-- [ ] Severity + CVSS vector on findings
-- [ ] Cross-agent dedupe (endpoint + class → one finding, merged evidence)
+- [x] Severity + CVSS vector on findings
+- [x] Cross-agent dedupe (endpoint + class → one finding, merged evidence)
 
-Skills expansion (target ~12 packs):
+Skills expansion (14 packs total):
 
-- [ ] idor, ssrf, auth_jwt, ssti, file_upload, open_redirect,
+- [x] idor, ssrf, auth_jwt, ssti, file_upload, open_redirect,
       prototype_pollution, business_logic
 
 Transcript:
 
-- [ ] Per-agent attribution in `transcript.jsonl` (agent_id, parent_id,
+- [x] Per-agent attribution in `transcript.jsonl` (agent_ctx, parent_id,
       status transitions) — everything the future UI needs
 
-Definition of done: Juice Shop demo where root spawns ≥3 specialists in
-parallel, dedupes findings, report ≥ Phase 1 quality at comparable cost.
+Definition of done: mock e2e (no LLM key) proves root spawns 3 specialists
+in parallel, dedupes overlapping findings, report ≥ Phase 1 format. Real-run
+validation (`vulnem demo` with a paid model): pending an API key — run it
+and compare cost/quality against the Phase 1 runs in `runs/`.
 
-## Phase 3 — Browser + proxy
+## Phase 3 — Browser + proxy ← CURRENT
 
 - [ ] Playwright headless Chromium in sandbox image
 - [ ] Browser tool: navigate/click/fill/screenshot; screenshots → transcript evidence

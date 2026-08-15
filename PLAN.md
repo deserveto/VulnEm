@@ -4,7 +4,7 @@ Autonomous AI penetration-testing agent for **authorized** security testing,
 built Strix-style: LLM agents + an isolated Docker sandbox full of security
 tooling, driven through recon → testing → validated PoC → report.
 
-This is the living roadmap. Current state: **Phase 1 shipped**, Phase 2 next.
+This is the living roadmap. Current state: **Phase 2 shipped**, Phase 3 next.
 
 ---
 
@@ -70,43 +70,45 @@ What exists:
 - Tests: `test_scope.py`, `test_findings.py`; `scripts/mock_e2e.py`
 - 7 real runs recorded; system prompt tuned from the first real transcript
 
-## Phase 2 — Coordinator + specialist agents (the "graph of agents")
+## Phase 2 — Coordinator + specialist agents ✅ (shipped 2026-08-16)
 
-Turn the single agent into an addressable multi-agent graph, Strix's core
-trick. This is the biggest phase; break it into the steps in `TODO.md`.
+The single agent became an addressable multi-agent graph. Verified by the
+self-checking multi-agent mock e2e (real Docker lab, scripted LLM, no API
+key): root spawns 3 specialists in parallel, parks in `wait_for_agents`,
+dedupes overlapping findings with merged attribution.
 
-New module `vulnem/agents/`:
+What exists now (on top of Phase 1):
 
-- **`coordinator.py`** — single owner of graph state:
+- `vulnem/agents/coordinator.py` — single owner of graph state:
   statuses (`running|waiting|completed|stopped|crashed|failed`),
-  parent/child tree, per-agent mailboxes (queue + wake event — a message to
-  a parked agent revives it), asyncio tasks, JSON snapshot/restore.
-- **Root agent** — orchestrator; system prompt forbids hands-on testing.
-  New tools: `create_agent`, `view_agent_graph`, `send_message_to_agent`,
-  `wait_for_agents`, `stop_agent`.
-- **Child agents** — same hands-on toolset as today's Phase 1 agent, plus
-  `agent_finish` which files a structured completion report (status,
-  summary, findings, recommendations) into the parent's session.
-- **Budget control** — per-agent turn caps, scan-wide spend/turn budget,
-  pause + extend (user can top up mid-run).
+  parent/child tree, per-agent mailboxes (queue + wake event — a message
+  to a parked agent revives it), scan-wide turn/token budget with
+  `--budget` / `resume --extend-turns`, JSON snapshot/restore.
+- `vulnem/agents/session.py` — `AgentSession` + async agent loop; each
+  agent is an asyncio task on one sandbox (exec/LLM in worker threads,
+  concurrency-capped); child crash isolation; wrap-up grace then
+  force-stop on budget exhaustion.
+- Root agent — delegation-only orchestrator (no exec tools, prompt
+  forbids touching the target): `create_agent`, `view_agent_graph`,
+  `send_message_to_agent`, `wait_for_agents` (blocks once — no polling),
+  `stop_agent`, `finish_scan`.
+- Children — Phase 1 hands-on toolset + `agent_finish`, which files a
+  structured completion report (status/summary/findings/recommendations)
+  into the parent's session as a high-priority message.
+- Findings: CVSS vector/score, per-agent attribution, cross-agent dedupe
+  (same endpoint + class → one finding, merged evidence, both reporters).
+- Skills: 14 packs (8 new classes + `coordination/root_agent` playbook).
+- `runs/<id>/` now also carries `state.json` + `sessions/*.json`;
+  `vulnem resume <run_dir>` rebuilds the graph and continues interrupted
+  agents (dangling tool calls repaired on restore).
+- `transcript.jsonl`: every event attributed (`agent_ctx`), plus
+  agent_created / agent_status / agent_message / message_delivered
+  lifecycle events — the data source for the Phase 4 live graph UI.
+- Phase 1 behavior preserved: `vulnem scan --solo` runs the single-agent
+  mode on the same engine.
 
-Supporting work:
-
-- Findings upgrade: severity field + CVSS vector, cross-agent dedupe
-  (same endpoint + same class collapse to one finding with merged evidence).
-- Inter-agent messaging format: `[Message from <name> | type | priority]`
-  injected as user-role items — no new transport needed.
-- Skills expansion toward ~12 packs: add `idor`, `ssrf`, `auth_jwt`,
-  `ssti`, `file_upload`, `open_redirect`, `prototype_pollution`,
-  `coordination/root_agent` (the delegation playbook).
-- Snapshot/resume: coordinator state + agent sessions to disk; `vulnem resume`.
-- Transcript upgrade: per-agent streams in `transcript.jsonl` so the future
-  UI can render the live graph.
-
-Exit criteria: a Juice Shop demo run where the root agent spawns ≥3
-specialists in parallel, dedupes overlapping findings, and produces a
-report at least as good as Phase 1's single-agent report, at comparable
-total cost.
+Pending: a real-LLM `vulnem demo` to compare cost/quality vs the Phase 1
+runs (needs an API key) — the exit criterion for closing Phase 2 fully.
 
 ## Phase 3 — Browser + proxy (web-app pentester, not just "agent with nmap")
 

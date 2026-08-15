@@ -1,8 +1,10 @@
 # VulnEm
 
 Autonomous AI penetration-testing agent for **authorized** security testing.
-One LLM agent + an isolated Docker sandbox full of security tooling, driven
-through recon → testing → validated PoC → report, Strix-style.
+A coordinator LLM agent decomposes the assessment and spawns specialist
+agents that work in parallel inside an isolated Docker sandbox full of
+security tooling, driven through recon → testing → validated PoC → report,
+Strix-style.
 
 > [!WARNING]
 > VulnEm actively probes its target. Only run it against systems you own or
@@ -52,34 +54,54 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
 ## How it works
 
 ```
-┌────────────┐   tool calls    ┌──────────────────────┐
-│  LLM agent │ ──────────────▶ │  Sandbox container   │
-│ (litellm)  │ ◀────────────── │  Debian + nmap,      │
-└────────────┘   tool results  │  sqlmap, nuclei,     │
-      │                         │  ffuf, katana, ...   │
-      │ findings                └──────────┬───────────┘
-      ▼                                     │ HTTP (Docker network,
-┌────────────────────────────┐              │  internal for labs)
-│ runs/<id>/ findings.json   │◀─────────────┘
-│            report.md       │        ┌──────────────┐
-│            transcript.jsonl│        │  lab target  │
-└────────────────────────────┘        │ (Juice Shop) │
-                                      └──────────────┘
+┌───────────────────────┐  create_agent / wait / message / stop
+│  ROOT (orchestrator)  │──────────────────────────────┐
+│  never touches target │◀─────────────────────────────┘
+└──────────┬────────────┘   completion reports, alerts
+           │ spawns in parallel
+   ┌───────┼─────────────┬──────────────┐
+   ▼       ▼             ▼              ▼
+┌────────┐ ┌────────┐ ┌────────┐  ┌──────────┐   tool calls
+│spec-1  │ │spec-2  │ │spec-3  │  │ ...      │ ─────────────▶ ┌──────────────────────┐
+│hands-on│ │hands-on│ │hands-on│  │          │ ◀───────────── │  Sandbox container   │
+└────────┘ └────────┘ └────────┘  └──────────┘  tool results  │  Debian + nmap,      │
+                                                          │  sqlmap, nuclei,     │
+┌────────────────────────────┐                             │  ffuf, katana, ...   │
+│ runs/<id>/ findings.json   │◀────────────────────────────┘        ┌──────────────┐
+│   report.md  transcript    │   HTTP (Docker network, internal     │  lab target  │
+│   state.json  sessions/    │       for labs)                      │ (Juice Shop) │
+└────────────────────────────┘                                      └──────────────┘
 ```
 
-- **Agent loop** (`vulnem/agent/loop.py`) — hand-rolled on litellm, no
-  framework. The scan only ends via the `finish_scan` tool; text-only turns
-  get nudged, then stopped (the most important lifecycle lesson from Strix).
-- **Tools** (`vulnem/agent/tools.py`) — `exec_command` (sandboxed shell),
-  `read_skill`, `report_finding`, `think`, `finish_scan`.
-- **Skills** (`skills/*.md`) — markdown methodology packs loaded on demand:
-  recon, sql_injection, xss, broken_access_control, command_injection. Add a
-  new `.md` file with a `description:` frontmatter and the agent can use it.
-- **Scope** (`vulnem/scope.py`) — prompt-level authoritative scope block, plus
-  network isolation for labs (the real guard).
+- **Coordinator** (`vulnem/agents/coordinator.py`) — single owner of the
+  agent graph: statuses (`running|waiting|completed|stopped|crashed|failed`),
+  parent/child tree, per-agent mailboxes (a message to a parked agent
+  revives it), scan-wide turn/token budget, JSON snapshot for resume.
+- **Root agent** — delegation-only orchestrator; it has *no* execution
+  tools and its prompt forbids touching the target. It decomposes the
+  assessment (`skills/coordination/root_agent.md` is its playbook), spawns
+  specialists, parks in `wait_for_agents` (one wait — no polling), and
+  synthesizes the final report from their completion reports.
+- **Specialists** (`vulnem/agents/session.py`) — Phase 1 hands-on toolset
+  (`exec_command`, `read_skill`, `report_finding`, `think`) plus
+  `agent_finish`, which files a structured completion report into the
+  parent's session. Each agent is an asyncio task on the shared sandbox;
+  a crashed child is isolated and reported, the scan continues.
+- **Lifecycle tools are the only exit** — an agent ends only via
+  `finish_scan` (root/solo) or `agent_finish` (specialist); plain text
+  never ends a turn.
+- **Skills** (`skills/*.md`) — 14 markdown methodology packs loaded on
+  demand: recon, sql_injection, xss, command_injection,
+  broken_access_control, idor, ssrf, auth_jwt, ssti, file_upload,
+  open_redirect, prototype_pollution, business_logic,
+  coordination/root_agent. Add a new `.md` file (subdirs allowed) with a
+  `description:` frontmatter and the agents can use it.
+- **Scope** (`vulnem/scope.py`) — every agent inherits the same
+  system-verified scope block; network isolation for labs is the real guard.
 - **Findings** (`vulnem/report/findings.py`) — pydantic-validated; every
-  finding must carry evidence + PoC + remediation; deduped, severity-ordered,
-  rendered to markdown + JSON.
+  finding carries evidence + PoC + remediation + CVSS + reporter;
+  overlapping findings from different agents (same endpoint + class) merge
+  into one with combined evidence and attribution.
 
 ## Configuration
 
@@ -87,13 +109,21 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
 | --- | --- | --- |
 | `VULNEM_LLM` | `openai/gpt-5` | litellm model string (`anthropic/claude-...`, `openrouter/...`, ...) |
 | `OPENAI_API_KEY` etc. | — | provider keys, read by litellm |
-| `VULNEM_MAX_TURNS` | `60` | agent turn cap |
-| `VULNEM_MAX_TOTAL_TOKENS` | `4000000` | hard token budget |
+| `VULNEM_MAX_TURNS` | `60` | per-agent turn cap (root/solo) |
+| `VULNEM_CHILD_MAX_TURNS` | `30` | default turn cap for specialists |
+| `VULNEM_MAX_AGENTS` | `8` | agent cap for the graph |
+| `VULNEM_MAX_TOTAL_TOKENS` | `4000000` | scan-wide hard token budget |
 | `VULNEM_CMD_TIMEOUT` | `120` | per-command sandbox timeout (s) |
+| `VULNEM_MAX_CONCURRENT_EXEC` | `4` | concurrent sandbox commands across agents |
 | `VULNEM_DOCKER_NETWORK` | — | attach sandbox to this network |
 | `VULNEM_YES` | — | `1` skips the authorization prompt |
 
-## Safety model (Phase 1)
+Useful flags: `vulnem scan --budget N` (scan-wide turn budget),
+`--max-agents N`, `--solo` (Phase 1 single-agent mode),
+`vulnem resume <run_dir> [--extend-turns N]` (continue an interrupted
+scan from its snapshot).
+
+## Safety model
 
 1. **Isolation** — everything executes inside a disposable container as a
    non-root user. Lab runs attach it to an *internal* Docker network: the
@@ -102,15 +132,17 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
 2. **Authorization gate** — non-lab scans require interactive confirmation.
 3. **Non-destructive rules** — enforced via system prompt (no DoS, no data
    destruction, minimal reversible payloads; validation over damage).
+4. **Budgets** — per-agent turn caps plus a scan-wide turn/token budget;
+   agents get wrap-up grace, then force-stop.
 
 ## Roadmap
 
 - [x] Phase 1 — single agent, sandbox, skills, findings, demo lab
-- [ ] Phase 2 — coordinator + specialist subagents (recon/exploit/validate),
-  agent graph with mailboxes (Strix-style)
+- [x] Phase 2 — coordinator + specialist agents: parallel graph, mailboxes,
+  budgets, crash isolation, cross-agent dedupe, snapshot/resume
 - [ ] Phase 3 — browser tool (Playwright) + HTTP proxy with scope enforcement
-- [ ] Phase 4 — live TUI/web viewer over `transcript.jsonl`, snapshot/resume,
-  SARIF output, white-box mode
+- [ ] Phase 4 — live TUI/web viewer over `transcript.jsonl`, SARIF output,
+  white-box mode, evals
 
 ## Legal
 
