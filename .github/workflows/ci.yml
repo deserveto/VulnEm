@@ -39,6 +39,7 @@ jobs:
       - name: Keyless scan of the lab (scripted engine) + contract assertions
         run: python scripts/mock_e2e.py
       - name: Verify CI report artifacts + upload run dir
+        if: always()
         shell: bash
         run: |
           set -euo pipefail

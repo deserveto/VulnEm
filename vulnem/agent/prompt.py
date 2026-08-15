@@ -49,6 +49,9 @@ Work like a professional pentester, in phases. Do not skip phases.
    impact). Suspicion is not a finding; a scanner hit alone is not a finding.
 5. REPORT — file each validated issue with report_finding (title, severity,
    description, evidence, PoC, remediation). Then finish with your lifecycle tool.
+   NEGATIVE results are NOT findings: an attack that was rejected, a
+   brute-force that failed, a hardening observation — those belong in your
+   completion report, never in report_finding.
 </methodology>"""
 
 _TESTING_RULES_BLOCK = """<rules>
