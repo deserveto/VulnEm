@@ -112,7 +112,7 @@ def build_transcript() -> list[dict]:
     # traffic: 30 captured flows + 1 scope block
     for i in range(1, 31):
         path = "/rest/products/search?q=x" if i % 3 else "/"
-        events.append(ev("10:01:%02d" % (i % 60), "proxy_flow", i=i, method="GET",
+        events.append(ev(f"10:01:{i % 60:02d}", "proxy_flow", i=i, method="GET",
                          host="juice-shop", path=path, status=200))
     events += [
         ev("10:01:59", "scope_blocked", layer="proxy", host="api.pdtm.sh",
