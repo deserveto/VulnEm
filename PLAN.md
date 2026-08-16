@@ -251,6 +251,39 @@ launch is a real `python -m vulnem.cli ...` subprocess.
 
 ---
 
+## Post-Phase 5 increments
+
+- **Cross-run consolidation** (2026-08-16) — `vulnem report --merge
+  <run_dir>... [--out DIR]` folds any number of completed runs of the same
+  target host into one consolidated report (`vulnem/report/merge.py`).
+  Motivation: one run is a sample — LLM-driven recon varies run to run, so
+  the same flaw can surface in one run and be missed in the next (observed
+  live on the bursanalar.com runs). Findings key on the same normalized
+  endpoint + vulnerability class that backs the SARIF fingerprints;
+  re-finds collapse into one finding carrying every reporting run
+  (`Finding.runs`), highest severity/confidence/CVSS wins, and each run's
+  evidence stays separately attributed — never blended. Merged reports land
+  in `runs/<ts>-<host>-merged-<id>/` (findings/report/SARIF/PDF/config with
+  `merged: true` + source list; no transcript), appear in the web runs
+  list with a "merged" chip, and open as report pages. Merging different
+  target hosts is refused. Covered by unit + CLI tests and the mock e2e
+  self-merge idempotence check.
+- **Resume-after-interrupt fixed + live-covered** (2026-08-16) — the
+  operator-interrupt path (`Ctrl+C` → snapshot → `vulnem resume`) was
+  broken in the field: `run_scan` awaited the root task directly, so a
+  cancel was routed INTO the root session, which finalized every agent
+  `stopped` (terminal) — `vulnem resume` then refused the run with
+  "nothing to resume". Fix: the root await is `asyncio.shield`ed, and a
+  `coordinator.interrupted` flag makes sessions skip finalize on operator
+  cancel (snapshot keeps agents waiting/running; no fabricated salvage).
+  New `scripts/mock_resume.py` exercises the whole path keyless against
+  the real lab (real interrupt mid-exec → real `cli._run_resume` with
+  fresh sandbox + re-provisioned proxy → specialist continues, pre-interrupt
+  findings survive, finish_scan ends the run); offline regression in
+  `tests/test_agents.py::test_real_interrupt_leaves_run_resumable`.
+
+---
+
 ## Cross-cutting rules
 
 - **Safety**: authorized targets only; `demo` stays on an isolated internal

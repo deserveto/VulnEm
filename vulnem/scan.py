@@ -342,7 +342,11 @@ async def run_scan(
     finished = False
     try:
         if root_record is not None and root_record.task is not None:
-            outcome = await root_record.task
+            # shielded: a direct `await task` would route an operator cancel
+            # (Task.cancel on run_scan) INTO the root session task, which
+            # swallows it as a per-agent stop — run_scan's own interrupt
+            # handler (snapshot-as-is for `vulnem resume`) would never run.
+            outcome = await asyncio.shield(root_record.task)
             finished = outcome.finished
             stop_reason = outcome.stop_reason
             summary = outcome.summary
@@ -365,6 +369,10 @@ async def run_scan(
     except asyncio.CancelledError:
         # Operator interrupt: snapshot as-is WITHOUT marking agents terminal —
         # running/waiting agents are exactly what `vulnem resume` continues.
+        # The flag tells each session's CancelledError handler to skip
+        # finalize_agent, which would otherwise flip them STOPPED (terminal)
+        # and fabricate salvage reports for work that is not lost.
+        coordinator.interrupted = True
         stop_reason = "interrupted"
         summary = "Scan interrupted by operator (state snapshotted; `vulnem resume` can continue)."
         for r in coordinator.agents.values():

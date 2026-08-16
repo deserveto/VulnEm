@@ -13,14 +13,16 @@ design system), `skills/` (agent methodology packs).
 
 - `vulnem/` — the tool. `agent/` (loop+prompt), `agents/` (coordinator,
   sessions), `sandbox/` (Docker), `proxy/` (mitmproxy sidecar), `tools/`
-  (exec/browser/proxy tools), `report/` (findings, sarif, pdf, mdrender),
-  `ui/` (TUI + pure reducer `state.py`), `web/` (local web app), `scope.py`,
-  `scan.py`, `cli.py`
+  (exec/browser/proxy tools), `report/` (findings, merge, sarif, pdf,
+  mdrender), `ui/` (TUI + pure reducer `state.py`), `web/` (local web app),
+  `scope.py`, `scan.py`, `cli.py`
 - `skills/*.md` — vulnerability methodology packs (markdown, not code)
 - `lab/` — docker-compose targets: juice-shop :3000, dvwa :4280, vulnapp
   :5001 (host ports); `evals/` — ground truth + results
 - `runs/<id>/` — scan output (gitignored): transcript.jsonl, findings.json,
-  report.md/pdf, sarif, state.json
+  report.md/pdf, sarif, state.json; `runs/<ts>-<host>-merged-<id>/` —
+  cross-run consolidated reports (`vulnem report --merge`, no transcript;
+  web shows them with a "merged" chip)
 - `tests/fixtures/run/` — committed fixture run (regenerate via
   `scripts/make_test_fixture.py`); real `runs/` is dev-machine only
 
@@ -29,9 +31,11 @@ design system), `skills/` (agent methodology packs).
 Venv at `.venv` — always `.venv/Scripts/python` / `.venv/Scripts/vulnem`.
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -q        # 204 tests, no Docker/LLM needed
+.venv/Scripts/python -m pytest tests/ -q        # 217 tests, no Docker/LLM needed
 .venv/Scripts/python -m ruff check vulnem/ tests/ scripts/
 .venv/Scripts/python scripts/mock_e2e.py        # keyless full-stack, ~45s
+.venv/Scripts/python scripts/mock_resume.py     # keyless interrupt+resume e2e
+                                                # (needs the vulnem-lab lab up)
 docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
 ```
 

@@ -191,6 +191,10 @@ class Coordinator:
         self.agents: dict[str, AgentRecord] = {}
         self._by_name: dict[str, str] = {}
         self._counter = 0
+        # Flipped by run_scan's operator-interrupt path BEFORE cancelling
+        # agent tasks: sessions must then leave their records non-terminal
+        # (snapshot as-is) so `vulnem resume` can continue them.
+        self.interrupted = False
         self._status_lock = asyncio.Lock()
         # snapshot() runs in a worker thread while the loop may register
         # agents — mutations and copies of the registry are guarded.

@@ -324,6 +324,12 @@ async def run_agent(session: AgentSession) -> AgentOutcome:
 
             await coordinator.snapshot_async()
     except asyncio.CancelledError:
+        if coordinator.interrupted:
+            # Operator interrupt (Ctrl+C): run_scan snapshots everyone as-is
+            # and `vulnem resume` continues non-terminal agents. Finalizing
+            # here would flip this record STOPPED (terminal) and fabricate a
+            # salvage report — the run would become unresumable.
+            raise
         stop_reason = "stopped"
         summary = summary or f"Agent {record.name} was stopped."
     except Exception as exc:

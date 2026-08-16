@@ -5,6 +5,7 @@ run_scan with completion_fn injected.
 """
 
 import asyncio
+import contextlib
 import json
 import sys
 import types
@@ -537,6 +538,97 @@ def test_load_resume_state_rejects_finished_runs(tmp_path):
     }), encoding="utf-8")
     with pytest.raises(ValueError, match="already finished"):
         load_resume_state(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_real_interrupt_leaves_run_resumable(tmp_path):
+    """A genuine mid-scan CancelledError (what Ctrl+C delivers through
+    asyncio.run) must snapshot root/waiting and leave it NON-terminal so the
+    run stays resumable — regression: the session cancel-handler used to
+    finalize interrupted agents as STOPPED (terminal), which made
+    `vulnem resume` refuse the run and fabricated salvage reports."""
+    scope = Scope.from_target("http://t:80")
+    llm = ScriptedLLM({
+        # root parks on the 2nd wait: fast-kid woke it once, sleeper is still
+        # mid-exec, so there is nothing left to wake it again.
+        "root": [("", "create_agent", {"name": "fast-kid", "objective": "probe"}),
+                 ("", "create_agent", {"name": "sleeper", "objective": "slow probe"}),
+                 ("", "wait_for_agents", {}),
+                 ("", "wait_for_agents", {}),
+                 # consumed after the resume (wait #3 is woken by sleeper)
+                 ("", "wait_for_agents", {}),
+                 ("", "view_agent_graph", {}),
+                 ("Resumed.", "finish_scan", {"summary": "resumed done"})],
+        "fast-kid": [("", "exec_command", {"command": "curl fast-probe"}),
+                     ("Done.", "agent_finish", {"status": "completed", "summary": "f"})],
+        "sleeper": [("", "exec_command", {"command": "curl slow-probe"}),
+                    ("Done.", "agent_finish", {"status": "completed", "summary": "s"})],
+    })
+
+    class SlowFakeSandbox(FakeSandbox):
+        """Execs block just long enough that root parks BEFORE each child
+        ends — completion reports then arrive while root is parked (the
+        wake pattern real scans produce), and the sleeper keeps root's
+        second wait parked until the cancel."""
+
+        def exec(self, command: str, *, timeout: int = 120):
+            import time
+
+            if "slow-probe" in command:
+                time.sleep(3.0)
+            elif "fast-probe" in command:
+                time.sleep(0.3)
+            return FakeSandbox._Res()
+
+    events: list[dict] = []
+    task = asyncio.create_task(run_scan(
+        scope=scope, settings=make_settings(), sandbox=SlowFakeSandbox(),
+        run_dir=tmp_path, completion_fn=llm, on_event=events.append))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 15
+    while loop.time() < deadline:
+        parks = sum(1 for e in events if e.get("type") == "agent_status"
+                    and e.get("agent") == "root" and e.get("to") == "waiting")
+        fast_done = any(e.get("type") == "agent_status" and e.get("agent") == "fast-kid"
+                        and e.get("to") == "completed" for e in events)
+        sleeper_mid = any(e.get("type") == "tool_call" and e.get("name") == "exec_command"
+                          and "slow-probe" in str((e.get("args") or {}).get("command", ""))
+                          and (e.get("agent_ctx") or {}).get("name") == "sleeper"
+                          for e in events)
+        if parks >= 2 and fast_done and sleeper_mid:
+            break
+        await asyncio.sleep(0.02)
+    else:
+        raise AssertionError("interrupt condition never reached")
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    agents = {a["name"]: a for a in state["agents"]}
+    # wait_for's finally may flip root waiting→running while the cancel
+    # unwinds; either way it must be NON-terminal for resume to continue it
+    assert agents["root"]["status"] in {"waiting", "running"}  # NOT stopped
+    assert agents["fast-kid"]["status"] == "completed"
+    assert agents["sleeper"]["status"] == "running"  # mid-work, not finalized
+    assert agents["root"].get("completion_report") is None  # no fake salvage
+    from vulnem.scan import load_resume_state
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"target": "http://t:80", "network": None, "proxy": False,
+                    "solo": False}), encoding="utf-8")
+    state = load_resume_state(tmp_path)  # must NOT refuse the run
+
+    result = await run_scan(scope=scope, settings=make_settings(),
+                            sandbox=SlowFakeSandbox(), run_dir=tmp_path,
+                            resume_state=state, completion_fn=llm)
+    assert result.finished and result.stop_reason == "finish_tool"
+    assert result.summary == "resumed done"
+    state2 = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    final = {a["name"]: a for a in state2["agents"]}
+    assert final["root"]["status"] == "completed"
+    assert final["fast-kid"]["status"] == "completed"  # terminal survived resume
+    assert final["sleeper"]["status"] == "completed"  # continued after resume
 
 
 def test_patch_dangling_tool_calls():
