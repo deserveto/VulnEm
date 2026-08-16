@@ -7,13 +7,16 @@ report writing — with litellm.completion replaced by a canned per-agent
 script. Proves everything except the paid model call works, WITHOUT an LLM
 API key.
 
-The scripted root spawns FOUR specialists in parallel: recon, sqli-search,
-access-control, and xss-browser. The browser specialist drives the REAL
-headless Chromium through the browser tools and inspects the REAL proxy log
-with the proxy tools, so the Phase 3 plumbing (daemon bring-up, per-agent
-contexts, screenshot artifacts, flow capture via the sidecar) is exercised
-end to end. Two agents deliberately report the same endpoint+class finding
-so cross-agent dedupe must collapse them in the final report.
+The scripted root spawns FIVE specialists in parallel: recon, sqli-search,
+access-control, xss-browser, and slow-mapper. The browser specialist drives
+the REAL headless Chromium through the browser tools and inspects the REAL
+proxy log with the proxy tools, so the Phase 3 plumbing (daemon bring-up,
+per-agent contexts, screenshot artifacts, flow capture via the sidecar) is
+exercised end to end. Two agents deliberately report the same endpoint+class
+finding so cross-agent dedupe must collapse them in the final report.
+slow-mapper is still mid-work (blocked inside a long exec) when root calls
+finish_scan, proving the sweep salvages stopped specialists: report with
+last stated progress, salvaged agent_end event, no lost narrative.
 
 Usage:  .venv/Scripts/python scripts/mock_e2e.py
 Exit codes: 0 = plumbing verified, 2 = verification failed.
@@ -53,13 +56,15 @@ ROOT_SCRIPT = [
         "it, then inspect and replay a captured request via the proxy tools. "
         "File one mock finding citing the screenshot artifact. Finish with "
         "agent_finish."}),
+    # Still mid-work when root finishes the scan: blocked inside a long exec,
+    # its last stated progress must be salvaged by the finish_scan sweep.
+    ("", "create_agent", {"name": "slow-mapper", "objective":
+        "Slow, thorough endpoint sweep of {TARGET}. Take your time; the "
+        "coordinator may finish the scan before you do."}),
     # Completion-report messages wake the root early — each wait returns on
-    # one wake, so keep waiting until every specialist is terminal (the
-    # scripted stand-in for a real root reacting to wait results).
-    ("", "wait_for_agents", {}),
-    ("", "wait_for_agents", {}),
-    ("", "wait_for_agents", {}),
-    ("", "wait_for_agents", {}),
+    # one wake. Four finishers = four wakes; a fifth wait would block on the
+    # still-running slow-mapper, so root proceeds straight to finish_scan
+    # with slow-mapper live (the salvage scenario under test).
     ("", "wait_for_agents", {}),
     ("", "wait_for_agents", {}),
     ("", "wait_for_agents", {}),
@@ -149,12 +154,28 @@ BROWSER_SCRIPT = [
                    "and one request replayed through the sidecar."}),
 ]
 
+# Blocked inside long execs when root finishes the scan: the finish_scan
+# sweep must salvage its last stated progress. The sleeps guarantee it is
+# mid-turn (never script-exhausted) whenever the faster specialists finish.
+SLOW_SCRIPT = [
+    ("", "read_skill", {"name": "recon"}),
+    ("Slow mapping in progress — endpoint sweep running.",
+     "exec_command", {"command": "sleep 25 && curl -s -o /dev/null -w '%{http_code}' {TARGET}"}),
+    ("Still sweeping endpoints.", "exec_command",
+     {"command": "sleep 25 && curl -s -o /dev/null -w '%{http_code}' {TARGET}"}),
+    ("Sweep continuing.", "exec_command",
+     {"command": "sleep 25 && curl -s -o /dev/null -w '%{http_code}' {TARGET}"}),
+    ("Done.", "agent_finish", {"status": "completed",
+        "summary": "never reached in the scripted run"}),
+]
+
 SCRIPTS_BY_AGENT = {
     "root": ROOT_SCRIPT,
     "recon-mapper": RECON_SCRIPT,
     "sqli-search": SQLI_SCRIPT,
     "access-probe": ACCESS_SCRIPT,
     "xss-browser": BROWSER_SCRIPT,
+    "slow-mapper": SLOW_SCRIPT,
 }
 
 
@@ -219,16 +240,28 @@ def _verify(run_dir: Path) -> list[str]:
     problems: list[str] = []
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     agents = {a["name"]: a for a in state["agents"]}
-    expected = {"root", "recon-mapper", "sqli-search", "access-probe", "xss-browser"}
+    expected = {"root", "recon-mapper", "sqli-search", "access-probe", "xss-browser",
+                "slow-mapper"}
     if set(agents) != expected:
         problems.append(f"agents in snapshot: {sorted(agents)} != {sorted(expected)}")
-    for name in expected - {"root"}:
+    for name in expected - {"root", "slow-mapper"}:
         if agents.get(name, {}).get("status") != "completed":
             problems.append(f"{name} status={agents.get(name, {}).get('status')!r}, want completed")
         if not agents.get(name, {}).get("completion_report"):
             problems.append(f"{name} filed no completion report")
     if agents.get("root", {}).get("status") != "completed":
         problems.append(f"root status={agents.get('root', {}).get('status')!r}, want completed")
+
+    # -- salvage: root finished the scan with slow-mapper still mid-work ----
+    slow = agents.get("slow-mapper", {})
+    if slow.get("status") != "stopped" or slow.get("stop_reason") != "scan finished by root":
+        problems.append(f"slow-mapper status={slow.get('status')!r} "
+                        f"stop={slow.get('stop_reason')!r}, want stopped/scan finished by root")
+    salvaged = slow.get("completion_report") or {}
+    if "AUTO-SALVAGED" not in (salvaged.get("summary") or ""):
+        problems.append("slow-mapper has no AUTO-SALVAGED completion report")
+    elif "endpoint sweep running" not in salvaged["summary"]:
+        problems.append("salvaged report lost slow-mapper's last stated progress")
 
     findings = json.loads((run_dir / "findings.json").read_text(encoding="utf-8"))["findings"]
     sqli = [f for f in findings if f.get("cwe") == "CWE-89"]
@@ -247,6 +280,18 @@ def _verify(run_dir: Path) -> list[str]:
     for want in ("agent_created", "agent_status", "message_delivered", "tool_call"):
         if want not in kinds:
             problems.append(f"transcript missing {want} events")
+
+    # salvage must be visible in the transcript too, not just state.json
+    slow_ends = [e for e in transcript if e["type"] == "agent_end"
+                 and e.get("agent_ctx", {}).get("name") == "slow-mapper"]
+    if len(slow_ends) != 1 or not slow_ends[0].get("salvaged"):
+        problems.append(f"slow-mapper agent_end events wrong: {len(slow_ends)} "
+                        "want exactly 1 salvaged (transcript completeness)")
+    salvaged_msgs = [e for e in transcript if e["type"] == "agent_message"
+                     and e.get("from") == "slow-mapper"
+                     and e.get("msg_type") == "completion_report"]
+    if not salvaged_msgs:
+        problems.append("no salvaged completion_report message from slow-mapper to root")
 
     # -- Phase 3: browser + proxy plumbing --------------------------------
     for want_tool in ("browser_navigate", "browser_read_page", "browser_screenshot",
@@ -347,6 +392,7 @@ def main() -> int:
         return 2
     console.print("  [green]PASS[/green] root spawned 4 specialists in parallel (incl. browser-driven)")
     console.print("  [green]PASS[/green] all specialists completed + filed reports")
+    console.print("  [green]PASS[/green] mid-work specialist salvaged when root finished early")
     console.print("  [green]PASS[/green] overlapping findings deduped with merged attribution")
     console.print("  [green]PASS[/green] transcript carries per-agent attribution")
     console.print("  [green]PASS[/green] real Chromium driven via browser tools; screenshot artifact persisted")
