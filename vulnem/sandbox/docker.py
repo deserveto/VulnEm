@@ -309,14 +309,18 @@ def _tar_member(name: str, data: bytes) -> bytes:
 
 def build_image(*, dockerfile_dir: Path, tag: str) -> None:
     """Build the sandbox image, printing progress lines as they arrive."""
-    client = docker.from_env()
-    print(f"[vulnem] building sandbox image {tag} from {dockerfile_dir} ...")
+    # timeout=None: a cold-cache build can compile silently for many minutes
+    # inside one RUN step (go install nuclei ...), and docker-py's 60s default
+    # read timeout would cancel the build on the first quiet stretch.
+    client = docker.from_env(timeout=None)
+    print(f"[vulnem] building sandbox image {tag} from {dockerfile_dir} ...",
+          flush=True)
     build_log = client.api.build(path=str(dockerfile_dir), tag=tag, decode=True, rm=True)
     for chunk in build_log:
         if "stream" in chunk:
             line = chunk["stream"].rstrip()
             if line:
-                print(f"  {line}")
+                print(f"  {line}", flush=True)  # piped readers (web job) see it live
         elif "error" in chunk:
             raise SandboxError(f"image build failed: {chunk['error']}")
-    print(f"[vulnem] image {tag} ready")
+    print(f"[vulnem] image {tag} ready", flush=True)
