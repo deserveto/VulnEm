@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Not found — VulnEm{% endblock %}
+{% block content %}
+<section class="empty nf">
+  <h1>404</h1>
+  <p>Nothing lives at <span class="mono">{{ path }}</span>.</p>
+  {% if detail %}<p class="dim">{{ detail }}</p>{% endif %}
+  <p class="dim"><a href="/">Back to runs</a></p>
+</section>
+{% endblock %}

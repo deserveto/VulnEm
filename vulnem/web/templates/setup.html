@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Setup — VulnEm{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Setup</h1>
+</div>
+{% if saved %}<div class="ok-banner">Saved — model and API key written to .env.</div>{% endif %}
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+
+<section class="pane form-card">
+  <h2>Environment checks</h2>
+  <ul class="checklist">
+  {% for c in checks %}
+    <li class="check {{ c.state }}">
+      <span class="check-icon">{% if c.state == "ok" %}✓{% elif c.state == "warn" %}!{% else %}✗{% endif %}</span>
+      <span class="check-body">
+        <span class="check-label">{{ c.label }}</span>
+        <span class="dim check-detail">{{ c.detail }}</span>
+      </span>
+    </li>
+  {% endfor %}
+  </ul>
+  <form method="post" action="/setup/refresh">
+    <div class="form-actions"><button type="submit" class="btn">Re-run checks</button></div>
+  </form>
+</section>
+
+<section class="pane form-card">
+  <h2>Model + API key</h2>
+  <p class="dim">Current model <code>{{ model }}</code> — API key
+    {% if key_set %}<span class="ok-text">set</span>{% else %}<span class="warn">not set</span>{% endif %}
+    {% if key_var %}(<code>{{ key_var }}</code>){% endif %}. The key value is
+    never shown after you save it.</p>
+  <form method="post" action="/setup/env">
+    <div class="field">
+      <label for="model">Model (litellm format)</label>
+      <input type="text" id="model" name="model" required value="{{ model }}"
+             placeholder="openai/gpt-5" autocomplete="off" spellcheck="false">
+      <p class="dim hint">The provider prefix picks the key variable:
+        openai → OPENAI_API_KEY, anthropic → ANTHROPIC_API_KEY,
+        openrouter → OPENROUTER_API_KEY, groq → GROQ_API_KEY.</p>
+    </div>
+    <div class="field">
+      <label for="api_key">API key</label>
+      <input type="password" id="api_key" name="api_key" autocomplete="new-password"
+             placeholder="{% if key_set %}leave blank to keep the existing key{% else %}sk-...{% endif %}">
+      <p class="dim hint">Written to <code>.env</code> in the project root and to
+        this server's environment — scans started from here use it immediately.</p>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn primary">Save</button>
+    </div>
+  </form>
+</section>
+
+<section class="pane form-card">
+  <h2>Sandbox image</h2>
+  {% if sandbox_ok %}
+    <p><span class="ok-text">✓ already built</span>
+      <span class="dim">— the sandbox image is present, scans can run.</span></p>
+  {% else %}
+    <p class="dim">The sandbox Docker image is missing — agents have nothing to
+      execute in. The build streams its output into a job page you can watch.</p>
+    <form method="post" action="/setup/build">
+      <div class="form-actions">
+        <button type="submit" class="btn primary">Build sandbox image</button>
+        <span class="dim hint">~5-10 min the first time.</span>
+        {% if build_job_id %}<span class="dim">build already running —
+          <a href="/jobs/{{ build_job_id }}">watch it</a></span>{% endif %}
+      </div>
+    </form>
+  {% endif %}
+</section>
+
+<section class="pane form-card">
+  <h2>Try it safely</h2>
+  <p class="dim">Spins a throwaway isolated lab (internal Docker network, Juice
+    Shop) and runs a full scan with report. Needs the LLM key; costs a few
+    minutes of tokens.</p>
+  <form method="post" action="/setup/demo">
+    <div class="form-actions">
+      <button type="submit" class="btn primary" {% if not demo_ready %}disabled
+        title="Needs Docker reachable, the sandbox image built, and the provider API key set."{% endif %}>
+        Run the safe demo (isolated Juice Shop lab + full scan)</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

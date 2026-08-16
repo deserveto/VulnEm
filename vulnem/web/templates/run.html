@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}{{ run_id }} — VulnEm{% endblock %}
+{% block content %}
+<section class="run-header">
+  <div class="run-title">
+    <h1 id="target" class="mono">{{ bootstrap.meta.target or run_id }}</h1>
+    <div class="sub">
+      <span id="model" class="dim">{{ bootstrap.meta.model }}</span>
+      <span id="status-badge" class="badge status-{{ bootstrap.status }}">{{ bootstrap.status }}</span>
+      <a class="dim" href="{{ report_url }}">report</a>
+    </div>
+  </div>
+  <div id="stats" class="stats dim mono"></div>
+</section>
+
+<section class="run-grid">
+  <div class="pane" id="agents-pane">
+    <h2>Agents</h2>
+    <ul id="agents" class="agent-tree"></ul>
+  </div>
+  <div class="right-col">
+    <div class="pane grow" id="stream-pane">
+      <h2>Stream <span id="stream-count" class="dim"></span></h2>
+      <div id="stream" class="stream mono"></div>
+    </div>
+    <div class="pane" id="findings-pane">
+      <h2>Findings <span id="findings-count" class="dim"></span></h2>
+      <table class="findings-table">
+        <thead><tr><th>Sev</th><th>Title</th><th>URL</th><th>By</th></tr></thead>
+        <tbody id="findings"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script id="bootstrap" type="application/json">{{ bootstrap | tojson }}</script>
+<script>window.VULNEM_EVENTS_URL = {{ events_url | tojson }};</script>
+<script src="/static/run.js"></script>
+{% endblock %}

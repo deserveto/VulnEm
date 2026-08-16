@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Report {{ report.target }} — VulnEm{% endblock %}
+{% block content %}
+<section class="report-head">
+  <h1 class="mono">{{ report.target }}</h1>
+  <p class="dim mono">{{ report.started_at }} → {{ report.finished_at }} · {{ report.model }}</p>
+  <p class="chips">
+    {% for sev, n in counts.items() %}
+      {% if n %}<span class="chip sev-{{ sev }}">{{ sev }} {{ n }}</span>{% endif %}
+    {% endfor %}
+    <span class="chip total">{{ findings | length }} total</span>
+  </p>
+</section>
+
+<section class="pane summary">
+  <h2>Summary</h2>
+  {% for para in summary_paragraphs %}<p class="summary-text">{{ para }}</p>{% endfor %}
+</section>
+
+<section id="findings-list">
+  {% for f in findings %}
+  <article class="finding pane">
+    <header>
+      <span class="badge sev-bg-{{ f.severity }}">{{ f.severity }}</span>
+      <h3>{{ f.title }}</h3>
+    </header>
+    <dl class="meta mono">
+      {% if f.url %}<div><dt>URL</dt><dd>{{ f.url }}</dd></div>{% endif %}
+      {% if f.cwe %}<div><dt>CWE</dt><dd>{{ f.cwe }}</dd></div>{% endif %}
+      {% if f.cvss_vector or f.cvss_score is not none %}
+        <div><dt>CVSS</dt><dd>{{ f.cvss_vector or "" }}{% if f.cvss_score is not none %} ({{ f.cvss_score }}){% endif %}</dd></div>
+      {% endif %}
+      {% if f.file %}<div><dt>File</dt><dd>{{ f.file }}{% if f.line %}:{{ f.line }}{% endif %}</dd></div>{% endif %}
+      {% if f.reported_by %}<div><dt>By</dt><dd>{{ f.reported_by }}</dd></div>{% endif %}
+      <div><dt>Confidence</dt><dd>{{ f.confidence }}</dd></div>
+    </dl>
+    <h4>Description</h4>
+    <p class="summary-text">{{ f.description }}</p>
+    <h4>Evidence</h4>
+    <pre class="code">{{ f.evidence }}</pre>
+    <h4>PoC</h4>
+    <pre class="code">{{ f.poc }}</pre>
+    <h4>Remediation</h4>
+    <p class="summary-text">{{ f.remediation }}</p>
+    {% if f.fix_patch and f.fix_patch.strip() %}
+      <h4>Fix patch</h4>
+      <pre class="code">{{ f.fix_patch }}</pre>
+    {% endif %}
+  </article>
+  {% else %}
+  <div class="empty"><p>No findings recorded.</p></div>
+  {% endfor %}
+</section>
+
+<footer class="downloads">
+  <span class="dim">Download:</span>
+  {% for name in downloads %}
+    <a href="/runs/{{ run_id }}/file/{{ name }}">{{ name }}</a>
+  {% endfor %}
+  <a href="/runs/{{ run_id }}">run view</a>
+</footer>
+{% endblock %}

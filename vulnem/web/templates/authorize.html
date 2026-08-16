@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Authorization required — VulnEm{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Authorization required</h1>
+</div>
+<div class="auth-panel">
+  <p class="auth-warn">Target <strong class="mono">{{ host }}</strong> is reachable from outside an isolated lab network.<br>
+    Automated testing without written permission is illegal in most jurisdictions.</p>
+  <p class="dim">This is the same confirmation the CLI requires: you must type the
+    exact host to confirm you are authorized to test it.</p>
+</div>
+{% if error %}<div class="error-banner">{{ error }}</div>{% endif %}
+<form class="pane form-card" method="post" action="/scan/authorize">
+  <input type="hidden" name="target" value="{{ values.target }}">
+  <input type="hidden" name="network" value="{{ values.network }}">
+  <input type="hidden" name="model" value="{{ values.model }}">
+  <input type="hidden" name="preset" value="{{ values.preset }}">
+  <input type="hidden" name="budget" value="{{ values.budget }}">
+  <input type="hidden" name="source_dir" value="{{ values.source_dir }}">
+  <input type="hidden" name="solo" value="{% if values.solo %}on{% endif %}">
+  <input type="hidden" name="no_proxy" value="{% if values.no_proxy %}on{% endif %}">
+  <input type="hidden" name="creds_path" value="{{ values.creds_path }}">
+  <div class="field">
+    <label for="confirm_host">Type the host <span class="mono">{{ host }}</span> to
+      confirm you are authorized to test it:</label>
+    <input type="text" id="confirm_host" name="confirm_host" required
+           autocomplete="off" spellcheck="false" autofocus>
+  </div>
+  <div class="form-actions">
+    <button type="submit" class="btn primary">Confirm and start scan</button>
+    <a class="btn" href="/scan">Cancel</a>
+  </div>
+</form>
+{% endblock %}

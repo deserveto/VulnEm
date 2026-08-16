@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ job.name }} — VulnEm{% endblock %}
+{% block content %}
+<section class="run-header">
+  <div class="run-title">
+    <h1 class="mono">{{ job.name }}</h1>
+    <div class="sub">
+      <span id="job-status" class="badge jstatus-{{ job.status }}">{{ job.status }}</span>
+      <span id="job-run-link">
+        {% if job.run_dir %}<a href="/runs/{{ job.run_dir }}">Open live run view →</a>{% endif %}
+      </span>
+    </div>
+  </div>
+  <form id="job-stop" method="post" action="{{ stop_url }}"
+        onsubmit="return confirm('Stop this job? The scan process will be terminated.')">
+    <button type="submit" id="job-stop-btn" class="btn danger">Stop</button>
+  </form>
+</section>
+
+<div class="pane">
+  <h2>Command</h2>
+  <pre id="job-argv" class="code mono">vulnem {{ job.argv | join(" ") }}</pre>
+</div>
+
+<div class="pane">
+  <h2>Output</h2>
+  <pre id="job-log" class="job-log mono">{% for line in job.log %}{{ line }}
+{% endfor %}</pre>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>window.VULNEM_JOB_STATUS_URL = {{ status_url | tojson }};</script>
+<script src="/static/job.js"></script>
+{% endblock %}

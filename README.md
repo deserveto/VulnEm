@@ -4,7 +4,8 @@ Autonomous AI penetration-testing agent for **authorized** security testing.
 A coordinator LLM agent decomposes the assessment and spawns specialist
 agents that work in parallel inside an isolated Docker sandbox full of
 security tooling, driven through recon → testing → validated PoC → report,
-Strix-style.
+Strix-style. A local web UI (`vulnem ui`) mirrors the whole flow in the
+browser — onboarding, launching scans, and watching them live.
 
 > [!WARNING]
 > VulnEm actively probes its target. Only run it against systems you own or
@@ -39,6 +40,30 @@ Reports land in `runs/<timestamp>-<host>/` — `report.md` (human),
 `report.pdf` (export), `transcript.jsonl` (every turn, tool call, and
 result — the data source for the live UI). Watch any run with
 `vulnem tui runs/<id>`; re-export SARIF/PDF with `vulnem report runs/<id>`.
+
+## Web UI
+
+```bash
+vulnem ui   # opens the local app at http://127.0.0.1:8756
+```
+
+The web app starts with a **Setup wizard** (`/setup`): it runs the
+`vulnem doctor` environment checks in the browser (Docker daemon, sandbox
+image, proxy sidecar, LLM model, API key, skill packs) with one-click
+fixes — edit the model + API key straight into `.env`, build the sandbox
+image as a watchable job, and run a safe demo (throwaway isolated Juice
+Shop lab + full scan) once the blockers are green. From there the **New
+scan** form offers the CLI's presets behind the same typed-host
+authorization confirmation, runs stream live (agent tree, tool calls,
+findings over SSE), and reports are browsable in-page. The CLI remains the
+power path with identical semantics — the web app drives the same `vulnem`
+commands as subprocesses and reads the same `runs/` output.
+
+The interface follows the repo's **StudioBlank design system** (`DESIGN.md`):
+light, strictly flat, zero border-radius, monochrome Inter + IBM Plex Mono
+with semantic color reserved for status. A sun/moon toggle (Heroicons) in
+the top bar switches to a faithfully inverted dark theme, persisted per
+browser.
 
 ## Scanning your own lab target
 
@@ -216,6 +241,9 @@ interrupted scan from its snapshot), `vulnem tui <run_dir> [--follow]`
 - [x] Phase 4 — live TUI, SARIF/PDF reports, white-box mode (semgrep +
   file:line + fix patches), CI mode with PR-check workflow, eval harness
   (recall/FP/cost), VulnApp planted-flaw lab target
+- [x] Phase 5 — interface-first web UI: setup wizard, scan driver, live run
+  viewing, report browsing (`vulnem ui`), StudioBlank design system with
+  dark mode
 
 ## Legal
 

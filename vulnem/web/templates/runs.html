@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Runs — VulnEm{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Runs</h1>
+</div>
+{% if setup_needed %}
+<div class="setup-banner">Setup incomplete — <a href="/setup">finish setup</a>
+  before starting scans.</div>
+{% endif %}
+{% if runs %}
+<div class="table-wrap">
+<table class="runs-table">
+  <thead>
+    <tr><th>Run</th><th>Target</th><th>Model</th><th>Started</th><th>Status</th><th>Findings</th></tr>
+  </thead>
+  <tbody>
+  {% for r in runs %}
+    <tr>
+      <td><a class="run-id" href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+      <td class="mono">{{ r.target or "—" }}</td>
+      <td class="dim">{{ r.model or "—" }}</td>
+      <td class="dim mono">{{ r.started_at or "—" }}</td>
+      <td><span class="badge status-{{ r.status }}">{{ r.status }}</span></td>
+      <td>
+        {% if r.findings %}
+          <span class="chips">
+          {% for sev in ["critical", "high", "medium", "low", "info"] %}
+            {% if r.findings[sev] %}
+              <span class="chip sev-{{ sev }}">{{ sev }} {{ r.findings[sev] }}</span>
+            {% endif %}
+          {% endfor %}
+          <span class="chip total">{{ r.findings.values() | sum }} total</span>
+          </span>
+        {% else %}<span class="dim">—</span>{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<div class="empty">
+  <p>No runs yet.</p>
+  <p class="dim">Scans write to <code>runs/&lt;id&gt;/</code> — start one with
+    <code>vulnem demo</code> or <code>vulnem scan &lt;target&gt;</code>,
+    then reload this page.</p>
+</div>
+{% endif %}
+{% endblock %}

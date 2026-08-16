@@ -4,7 +4,7 @@ Autonomous AI penetration-testing agent for **authorized** security testing,
 built Strix-style: LLM agents + an isolated Docker sandbox full of security
 tooling, driven through recon → testing → validated PoC → report.
 
-This is the living roadmap. Current state: **Phase 4 shipped**.
+This is the living roadmap. Current state: **Phase 5 shipped**.
 
 ---
 
@@ -217,6 +217,37 @@ What exists (on top of Phase 3):
 
 Exit criteria: MET (2026-08-16) — CI job + TUI + SARIF validated + eval
 table; run accounting in TODO.md.
+
+## Phase 5 — Interface-first web UI ✅ (shipped 2026-08-16)
+
+`vulnem ui` (127.0.0.1:8756) — a local FastAPI app that drives and observes
+the same engine the CLI does; no new scan semantics were invented, every
+launch is a real `python -m vulnem.cli ...` subprocess.
+
+- **W1 viewer** — runs list, run page (agent tree + live SSE stream +
+  findings, reusing the TUI's reducer through `serialize`/`tail` helpers),
+  structured report pages, whitelisted raw-file and artifact routes.
+- **W2 scan driver** — new-scan form (presets + advanced options), the
+  typed-host authorization gate with exact CLI parity (`scans.py` is the
+  pure logic, unit-tested), and a `JobManager` running CLI subprocesses
+  with streamed logs, run-dir discovery, job pages and stop.
+- **W3 setup wizard** — `/setup` renders the doctor checks in the browser
+  (`checks.py`, cached 30s so page loads stay fast when Docker is down)
+  with one-click fixes: a model + API-key editor for `.env` (`envfile.py`
+  upsert preserves comments/order; key values are write-only — never
+  rendered or logged), sandbox-image build and the safe demo as tracked
+  jobs (double-launch guard; demo disabled until docker/image/key pass),
+  and a setup-incomplete banner on the runs list.
+- **StudioBlank redesign + dark mode** — the whole interface was restyled to
+  the repo's `DESIGN.md` design system (light `#FAFAFA`, strictly flat, 0px
+  radius everywhere, monochrome Inter + IBM Plex Mono, semantic color only
+  as status; fonts via local fallbacks — the app stays CDN-free/offline).
+  A Heroicons sun/moon toggle in the top bar swaps the CSS custom-property
+  tokens to a faithful dark inversion (`[data-theme="dark"]`), persisted in
+  localStorage with a pre-paint `<head>` script (no flash). Chrome polish:
+  favicon, skip-link, active-nav states, branded 404 page, tabular numerals,
+  reduced-motion support. Functionality, routes, and the JS contracts were
+  untouched — 170 tests stayed green throughout.
 
 ---
 

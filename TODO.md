@@ -198,8 +198,38 @@ Phase 4 exit criteria: MET — CI pr-check job live, TUI replays recorded
 runs, SARIF validated against the OASIS schema, eval table from multiple
 targets.
 
+## Phase 5 — Web UI ✅ DONE (2026-08-16)
+
+- [x] W1 viewer: runs list, run page (live SSE stream reusing the TUI
+      reducer), report pages, whitelisted file/artifact routes
+- [x] W2 scan driver: new-scan form + presets, typed-host authorization
+      gate with exact CLI parity, background JobManager subprocesses
+      (real `vulnem` CLI) with streamed logs, job pages with stop
+- [x] W3 setup wizard: `/setup` runs the doctor checks in the browser
+      (cached 30s, refreshable) with ok/warn/fail states and safe details
+- [x] Model + API key editor: order/comment-preserving atomic upsert into
+      `.env` + live os.environ update; key values are write-only — never
+      rendered, logged, or echoed into any response
+- [x] One-click sandbox image build + safe demo launch as tracked jobs
+      (double-launch guard redirects to the running build; demo gated on
+      docker reachable + sandbox image + provider key)
+- [x] Runs-list banner links to /setup while critical checks fail
+- [x] Tests: checks/envfile units + HTTP wizard flows with fake docker
+      clients and fake job cmds (fresh-checkout safe, secrets non-leakage
+      asserted)
+- [x] StudioBlank redesign per DESIGN.md: light theme, flat geometry
+      (0 radius, no shadows), monochrome + status-only semantic color,
+      Inter/IBM Plex Mono with local fallbacks (no CDN)
+- [x] Dark mode: Heroicons sun/moon toggle swapping inverted design tokens,
+      persisted per browser, flash-free (pre-paint head script)
+- [x] Chrome polish: favicon, skip-link, active nav, branded 404 (keeps the
+      route's reason text), tabular numerals, reduced-motion support
+
+(The old parking-lot "web viewer if Textual limits bite" item is settled
+by this phase — the web UI shipped alongside the TUI rather than replacing
+it.)
+
 ## Parking lot (unscheduled)
 
 - [ ] Local-model support validation (Ollama) for air-gapped runs
 - [ ] Multi-target scans from a file
-- [ ] Web viewer if Textual limits bite

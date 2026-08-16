@@ -551,6 +551,26 @@ def cmd_tui(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from vulnem.web.app import create_app
+
+    settings = _resolve_paths(Settings.load(project_root=PROJECT_ROOT))
+    app = create_app(settings)
+    url = f"http://{args.host}:{args.port}"
+    console.print(f"[cyan]VulnEm web UI:[/cyan] {url} "
+                  "(read-only — browse runs, watch scans live, read reports)")
+    if not args.no_open:
+        threading.Timer(1.0, webbrowser.open, args=[url]).start()
+    with contextlib.suppress(KeyboardInterrupt):
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def cmd_skills(_args: argparse.Namespace) -> int:
     settings = _resolve_paths(Settings.load(project_root=PROJECT_ROOT))
     packs = _list_skills(settings.skills_dir)
@@ -693,6 +713,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_tui.add_argument("--follow", action="store_true",
                        help="Keep tailing the transcript after catch-up (live scan)")
     p_tui.set_defaults(func=cmd_tui)
+
+    p_ui = sub.add_parser(
+        "ui", help="Open the local web app (browse runs, watch scans live, read reports)")
+    p_ui.add_argument("--host", default="127.0.0.1",
+                      help="Bind address (default: 127.0.0.1)")
+    p_ui.add_argument("--port", type=int, default=8756,
+                      help="Port to listen on (default: 8756)")
+    p_ui.add_argument("--no-open", action="store_true",
+                      help="Do not auto-open the browser")
+    p_ui.set_defaults(func=cmd_ui)
 
     p_skills = sub.add_parser("skills", help="List skill packs")
     p_skills.set_defaults(func=cmd_skills)
