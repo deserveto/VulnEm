@@ -37,15 +37,18 @@ _MAX_TEXT_ONLY_TURNS = 3
 # budget is exhausted; then it is force-stopped.
 _WRAPUP_GRACE_TURNS = 2
 
-# Stop reasons where a specialist's unfinished work is still worth reporting:
-# it ran and produced narrative/findings but never reached its finish tool.
-# error/crashed are excluded — no salvageable narrative, own alerting.
-_SALVAGE_STOP_REASONS = {"max_turns", "scan_budget", "stalled", "stopped"}
+# A specialist's unfinished work is salvaged for every terminal state except
+# engine errors — any stop path can leave narrative/findings behind, including
+# custom stop reasons from future graph tools. (crashed never reaches
+# finalize_agent; it reports through its own alerting path in _run_guarded.)
+_NO_SALVAGE_STOP_REASONS = {"error"}
 _SALVAGE_WHY = {
     "max_turns": "hit its per-agent turn cap",
     "scan_budget": "was force-stopped by the scan-wide budget",
     "stalled": "stalled after repeated turns without a tool call",
     "stopped": "was stopped",
+    "scan finished by root": "was stopped because the root coordinator "
+                             "finished the scan",
 }
 
 # The Phase 1 hands-on toolset shared by solo agents and specialists
@@ -395,6 +398,46 @@ def _completion_report_body(report: dict[str, Any]) -> str:
     )
 
 
+async def salvage_stopped_child(coordinator, record, stop_reason: str) -> None:
+    """Salvage a specialist that a parent tool is stopping mid-work.
+
+    The graph-tool stop paths (the finish_scan sweep) terminalize the record
+    BEFORE cancelling its task, so the task's finalize_agent returns at its
+    terminal guard and would otherwise file nothing — the report, the
+    agent_end event, and the parent notification must come from here instead.
+    Called from the parent's own task, so awaits are safe.
+    """
+    if (record.parent_id is None or record.completion_report is not None
+            or record.session is None):
+        return
+    session: AgentSession = record.session
+    outcome = AgentOutcome(
+        stop_reason=stop_reason,
+        summary=f"Agent {record.name} was stopped ({stop_reason}).",
+        finished=False,
+    )
+    # Built + assigned synchronously: a concurrently finishing child that
+    # files its own report in this window wins, never the salvage.
+    record.completion_report = _salvage_completion_report(session, outcome)
+    record.stop_reason = record.stop_reason or stop_reason
+    session.emit({
+        "type": "agent_end",
+        "stop_reason": stop_reason,
+        "turns_used": record.turns_used,
+        "total_tokens": record.total_tokens,
+        "findings": len(record.findings()),
+        "salvaged": True,
+    })
+    parent = coordinator.agents.get(record.parent_id)
+    if parent is not None:
+        await coordinator.deliver(
+            parent,
+            Message(from_name=record.name, msg_type="completion_report",
+                    priority="high",
+                    content=_completion_report_body(record.completion_report)),
+        )
+
+
 async def finalize_agent(session: AgentSession, outcome: AgentOutcome) -> None:
     """Map an outcome onto the final registry status + notify the parent.
 
@@ -422,7 +465,7 @@ async def finalize_agent(session: AgentSession, outcome: AgentOutcome) -> None:
         record.parent_id is not None
         and not outcome.finished
         and record.completion_report is None
-        and outcome.stop_reason in _SALVAGE_STOP_REASONS
+        and outcome.stop_reason not in _NO_SALVAGE_STOP_REASONS
     )
     if salvaged:
         record.completion_report = _salvage_completion_report(session, outcome)

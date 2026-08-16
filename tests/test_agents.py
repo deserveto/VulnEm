@@ -758,3 +758,97 @@ async def test_stalled_specialist_salvage_falls_back_to_outcome_summary(tmp_path
               (tmp_path / "transcript.jsonl").read_text(encoding="utf-8").splitlines()]
     to_root = [e for e in events if e["type"] == "agent_message" and e["to"] == "root"]
     assert [e["msg_type"] for e in to_root] == ["completion_report"]
+
+
+@pytest.mark.asyncio
+async def test_finish_scan_sweep_salvages_live_specialists(tmp_path):
+    # Root finishing the scan stops still-live specialists via the finish_scan
+    # sweep, which terminalizes records BEFORE cancelling their tasks — so
+    # finalize_agent's terminal guard skips them. The sweep itself must file
+    # the salvage (report + agent_end + parent message) or a mid-work
+    # specialist's narrative vanishes (observed live: 976k tokens lost).
+    from vulnem.agents.graph_tools import _tool_finish_scan
+    from vulnem.agents.session import AgentSession
+
+    coordinator = Coordinator(run_dir=tmp_path, budget=Budget(max_turns=100))
+    root = coordinator.register(name="root", role="root", parent_id=None,
+                                objective="o", max_turns=10)
+    kid = coordinator.register(name="mapper", role="specialist", parent_id="a1",
+                               objective="map the API", max_turns=30)
+    scope = Scope.from_target("http://t:80")
+
+    def _session(record, finish):
+        return AgentSession(
+            record=record, coordinator=coordinator, scope=scope,
+            settings=make_settings(), sandbox=FakeSandbox(),
+            tool_names={"exec_command"}, finish_tool=finish,
+            system_prompt="SP", initial_task="t", completion_fn=None,
+        )
+
+    root_session = _session(root, "finish_scan")
+    kid_session = _session(kid, "agent_finish")
+    kid.turns_used = 5
+    kid_session.messages.append(
+        {"role": "assistant", "content": "Mapped 12 API routes; session flow next."})
+
+    result = await _tool_finish_scan(root_session, {"summary": "scan done"})
+
+    assert json.loads(result)["ok"] is True
+    assert kid.status == AgentStatus.STOPPED
+    assert kid.stop_reason == "scan finished by root"
+    report = kid.completion_report
+    assert report is not None and report["agent"] == "mapper"
+    assert "AUTO-SALVAGED" in report["summary"]
+    assert "finished the scan" in report["summary"]
+    assert "Turns used: 5/30" in report["summary"]
+    assert "Mapped 12 API routes" in report["summary"]  # last progress kept
+    assert root.completion_report == {"status": "completed", "summary": "scan done"}
+
+    msgs = coordinator.drain_mailbox(root)
+    assert [m.msg_type for m in msgs] == ["completion_report"]
+    assert msgs[0].content.startswith("COMPLETION REPORT from specialist 'mapper'")
+
+    events = [json.loads(line) for line in
+              (tmp_path / "transcript.jsonl").read_text(encoding="utf-8").splitlines()]
+    ends = [e for e in events if e["type"] == "agent_end"
+            and e["agent_ctx"]["name"] == "mapper"]
+    assert len(ends) == 1
+    assert ends[0]["salvaged"] is True
+    assert ends[0]["stop_reason"] == "scan finished by root"
+
+
+@pytest.mark.asyncio
+async def test_only_engine_errors_skip_salvage(tmp_path):
+    # finalize_agent salvages by DENYLIST: every stop reason except "error"
+    # keeps its narrative — including custom reasons future tools may invent.
+    from vulnem.agents.session import AgentOutcome, AgentSession, finalize_agent
+
+    async def _finalize(stop_reason: str):
+        run_dir = tmp_path / stop_reason.replace(" ", "-")
+        run_dir.mkdir()
+        coordinator = Coordinator(run_dir=run_dir, budget=Budget(max_turns=100))
+        coordinator.register(name="root", role="root", parent_id=None,
+                             objective="o", max_turns=10)
+        kid = coordinator.register(name="worker", role="specialist", parent_id="a1",
+                                   objective="o", max_turns=10)
+        session = AgentSession(
+            record=kid, coordinator=coordinator, scope=Scope.from_target("http://t:80"),
+            settings=make_settings(), sandbox=FakeSandbox(),
+            tool_names={"exec_command"}, finish_tool="agent_finish",
+            system_prompt="SP", initial_task="t", completion_fn=None,
+        )
+        session.messages.append({"role": "assistant", "content": "progress note"})
+        await finalize_agent(session, AgentOutcome(stop_reason=stop_reason,
+                                                   summary="s", finished=False))
+        return coordinator, kid
+
+    coordinator, kid = await _finalize("error")
+    assert kid.completion_report is None  # engine errors keep their own alerting
+    alerts = [m for m in coordinator.drain_mailbox(coordinator.agents["a1"])
+              if m.msg_type == "alert"]
+    assert alerts, "error path still alerts the parent"
+
+    coordinator, kid = await _finalize("weird-future-reason")
+    assert kid.completion_report is not None
+    assert "AUTO-SALVAGED" in kid.completion_report["summary"]
+    assert "progress note" in kid.completion_report["summary"]

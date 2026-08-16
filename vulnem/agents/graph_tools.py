@@ -21,6 +21,7 @@ from vulnem.agents.coordinator import AgentStatus, Budget, Message
 from vulnem.agents.session import (
     HANDS_ON_SESSION_TOOLS,
     AgentSession,
+    salvage_stopped_child,
     spawn_agent_task,
 )
 from vulnem.config import Settings
@@ -211,6 +212,11 @@ async def _tool_finish_scan(sess: AgentSession, args: dict[str, Any]) -> str:
     for record in list(coordinator.agents.values()):
         if record is sess.record or record.terminal:
             continue
+        # Stopped-because-scan-ended specialists still leave work behind —
+        # salvage BEFORE terminalizing: the cancelled task's finalize_agent
+        # skips terminal records, so this is the only place their report,
+        # agent_end event, and parent notification can be filed.
+        await salvage_stopped_child(coordinator, record, "scan finished by root")
         record.stop_reason = record.stop_reason or "scan finished by root"
         coordinator.set_status(record, AgentStatus.STOPPED, "root finished scan")
         if record.task is not None and not record.task.done():
