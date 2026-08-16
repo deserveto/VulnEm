@@ -48,8 +48,10 @@
         this server's environment — scans started from here use it immediately.</p>
     </div>
     <div class="form-actions">
+      <button type="button" class="btn" id="test-llm-btn">Test connection</button>
       <button type="submit" class="btn primary">Save</button>
     </div>
+    <p class="hint" id="test-llm-result" hidden></p>
   </form>
 </section>
 
@@ -85,4 +87,7 @@
     </div>
   </form>
 </section>
+{% endblock %}
+{% block scripts %}
+<script src="/static/llmtest.js"></script>
 {% endblock %}

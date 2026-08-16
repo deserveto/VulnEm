@@ -419,3 +419,188 @@ def test_runs_no_banner_when_setup_complete(wizard: SimpleNamespace,
     resp = wizard.client.get("/")
     assert resp.status_code == 200
     assert "finish setup" not in resp.text
+
+
+# -- checks.llm_ping (Test connection probe) ------------------------------------------
+
+
+def test_llm_ping_ok() -> None:
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(model="gpt-5-served-2026")
+
+    result = checks.llm_ping("openai/gpt-5", api_key="sk-unit-test",
+                             completion_fn=fake_completion)
+    assert result["ok"] is True
+    assert result["model"] == "gpt-5-served-2026"  # the served model, echoed
+    assert isinstance(result["latency_ms"], int) and result["latency_ms"] >= 0
+    assert captured["max_tokens"] == 1
+    assert captured["num_retries"] == 0
+    assert captured["messages"] == [{"role": "user", "content": "ping"}]
+    assert captured["api_key"] == "sk-unit-test"  # explicit key wins
+
+
+def test_llm_ping_omits_api_key_kwarg_when_none() -> None:
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(model="groq/x")
+
+    assert checks.llm_ping("groq/x", completion_fn=fake_completion)["ok"]
+    assert "api_key" not in captured  # litellm reads the env var itself
+
+
+def test_llm_ping_classifies_auth_error() -> None:
+    from litellm.exceptions import AuthenticationError
+
+    def fake_completion(**kwargs):
+        raise AuthenticationError("Invalid API key", "openai", "gpt-5")
+
+    result = checks.llm_ping("openai/gpt-5", api_key="sk-wrong",
+                             completion_fn=fake_completion)
+    assert result["ok"] is False
+    assert "authentication failed (401)" in result["error"]
+
+
+def test_llm_ping_classifies_service_unavailable() -> None:
+    from litellm.exceptions import ServiceUnavailableError
+
+    def fake_completion(**kwargs):
+        raise ServiceUnavailableError(
+            "system memory overloaded", "openai", "gpt-5")
+
+    result = checks.llm_ping("openai/gpt-5", completion_fn=fake_completion)
+    assert result["ok"] is False
+    assert "provider unavailable (5xx)" in result["error"]
+
+
+def test_llm_ping_scrubs_submitted_key_from_error() -> None:
+    def fake_completion(**kwargs):
+        raise RuntimeError("request denied for key sk-test-secret-123")
+
+    result = checks.llm_ping("openai/gpt-5", api_key="sk-test-secret-123",
+                             completion_fn=fake_completion)
+    assert result["ok"] is False
+    assert "sk-test-secret-123" not in result["error"]
+    assert "***" in result["error"]  # scrubbed, not just dropped
+
+
+def test_llm_ping_scrubs_env_key_values(monkeypatch) -> None:
+    monkeypatch.setenv("GROQ_API_KEY", "gsk_env-secret-99")
+
+    def fake_completion(**kwargs):
+        raise RuntimeError("provider said gsk_env-secret-99 is invalid")
+
+    result = checks.llm_ping("groq/x", completion_fn=fake_completion)
+    assert result["ok"] is False
+    assert "gsk_env-secret-99" not in result["error"]
+
+
+# -- POST /setup/test-llm ---------------------------------------------------------------
+
+
+class FakePing:
+    """Stand-in for checks.llm_ping on app.state — records, never calls out."""
+
+    def __init__(self, result: dict | None = None) -> None:
+        self.result = result or {"ok": True, "model": "gpt-5-served",
+                                 "latency_ms": 7, "error": ""}
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, model: str, *, api_key: str | None = None) -> dict:
+        self.calls.append((model, api_key or ""))
+        return dict(self.result)
+
+
+def test_setup_page_has_test_connection_button(wizard: SimpleNamespace) -> None:
+    resp = wizard.client.get("/setup")
+    assert resp.status_code == 200
+    assert 'id="test-llm-btn"' in resp.text
+    assert 'id="test-llm-result"' in resp.text
+    assert "/static/llmtest.js" in resp.text
+
+
+def test_scan_page_has_test_connection_button(wizard: SimpleNamespace) -> None:
+    resp = wizard.client.get("/scan")
+    assert resp.status_code == 200
+    assert 'id="test-llm-btn"' in resp.text  # beside the model override field
+    assert 'id="test-llm-result"' in resp.text
+    assert "/static/llmtest.js" in resp.text
+
+
+def test_post_test_llm_success_never_echoes_key(
+        wizard: SimpleNamespace) -> None:
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm",
+        json={"model": "openai/gpt-5", "api_key": "sk-test-123"})
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert ping.calls == [("openai/gpt-5", "sk-test-123")]
+    assert "sk-test-123" not in resp.text  # write-only: never echoed back
+    assert not wizard.env_path.exists()  # testing saves nothing
+    assert "OPENAI_API_KEY" not in os.environ
+
+
+def test_post_test_llm_blank_key_uses_env_key(wizard: SimpleNamespace,
+                                              monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key-xyz")
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "openai/gpt-5", "api_key": ""})
+    assert resp.status_code == 200
+    assert ping.calls == [("openai/gpt-5", "env-key-xyz")]
+
+
+def test_post_test_llm_blank_key_falls_back_to_env_file(
+        wizard: SimpleNamespace) -> None:
+    wizard.env_path.write_text("OPENAI_API_KEY=file-key-abc\n",
+                               encoding="utf-8")
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "openai/gpt-5", "api_key": ""})
+    assert resp.status_code == 200
+    assert ping.calls == [("openai/gpt-5", "file-key-abc")]
+
+
+def test_post_test_llm_no_key_anywhere(wizard: SimpleNamespace) -> None:
+    wizard.app.state.llm_ping_fn = FakePing()
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "openai/gpt-5", "api_key": ""})
+    assert resp.status_code == 400
+    assert "No API key" in resp.text
+    assert wizard.app.state.llm_ping_fn.calls == []  # probe never launched
+
+
+def test_post_test_llm_validation(wizard: SimpleNamespace) -> None:
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post("/setup/test-llm",
+                              json={"model": "gpt-5-no-slash", "api_key": "k"})
+    assert resp.status_code == 400 and "provider prefix" in resp.text
+    resp = wizard.client.post("/setup/test-llm",
+                              json={"model": "weird/model", "api_key": "k"})
+    assert resp.status_code == 400 and "manually" in resp.text
+    resp = wizard.client.post("/setup/test-llm",
+                              content=b"not json",
+                              headers={"Content-Type": "application/json"})
+    assert resp.status_code == 400 and "JSON" in resp.text
+    assert ping.calls == []
+
+
+def test_post_test_llm_probe_failure_is_200_with_payload(
+        wizard: SimpleNamespace) -> None:
+    wizard.app.state.llm_ping_fn = FakePing(
+        {"ok": False, "model": "openai/gpt-5", "latency_ms": 31,
+         "error": "authentication failed (401) — the API key was rejected"})
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "openai/gpt-5", "api_key": "sk-bad"})
+    assert resp.status_code == 200  # the request worked; the probe failed
+    data = resp.json()
+    assert data["ok"] is False and "401" in data["error"]

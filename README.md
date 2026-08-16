@@ -29,7 +29,7 @@ pip install -e ".[dev]"
 vulnem build
 
 # 4. Verify the environment
-vulnem doctor
+vulnem doctor              # add --ping-llm to also validate the key + model for real
 
 # 5. One-command demo: isolated Juice Shop lab + full scan + report
 vulnem demo

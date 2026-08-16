@@ -17,6 +17,7 @@ not be recognized (this is also why form fields are read via
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -478,6 +479,46 @@ def create_app(settings: Settings, jobs_manager: jobs.JobManager | None = None):
         os.environ.update(updates)  # running checks/jobs see it without restart
         settings.model = model
         return RedirectResponse("/setup?saved=1&refresh=1", status_code=303)
+
+    @app.post("/setup/test-llm")
+    async def setup_test_llm(request: Request):
+        """On-demand provider round-trip for the Model + API key card.
+
+        Tests the values currently typed in the form — a blank key field
+        falls back to the saved key (live env, then .env) — without saving
+        anything. The key is spent on the one call only: never persisted,
+        logged, or echoed back. ``app.state.llm_ping_fn`` is the test seam,
+        mirroring ``app.state.docker_client``.
+        """
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict):
+            return JSONResponse({"ok": False, "error": "Expected a JSON object "
+                                 "with model and api_key."}, status_code=400)
+        model = str(payload.get("model") or "").strip()
+        api_key = str(payload.get("api_key") or "").strip()
+        if not model or "/" not in model:
+            return JSONResponse({"ok": False, "error": "Model must be a litellm "
+                                 "string with a provider prefix, e.g. "
+                                 "openai/gpt-5."}, status_code=400)
+        provider = model.split("/", 1)[0]
+        key_var = checks.PROVIDER_KEY_VARS.get(provider)
+        if key_var is None:
+            return JSONResponse({"ok": False, "error": f"Unknown provider "
+                                 f"{provider!r} — set its key env var manually "
+                                 "in .env."}, status_code=400)
+        if not api_key:  # blank field: test the already-saved key instead
+            api_key = (os.environ.get(key_var)
+                       or envfile.read_env(app.state.env_path).get(key_var) or "")
+        if not api_key:
+            return JSONResponse({"ok": False, "error": f"No API key for "
+                                 f"{key_var} — set it on the Setup page "
+                                 "first."}, status_code=400)
+        ping = getattr(app.state, "llm_ping_fn", checks.llm_ping)
+        result = await asyncio.to_thread(ping, model, api_key=api_key)
+        return JSONResponse(result)  # probe failure is 200 + ok:false
 
     @app.post("/setup/build")
     def setup_build():

@@ -654,7 +654,7 @@ def cmd_skills(_args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_doctor(_args: argparse.Namespace) -> int:
+def cmd_doctor(args: argparse.Namespace) -> int:
     import os
 
     ok = True
@@ -702,6 +702,17 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         console.print("  (custom provider — verify its API key yourself)")
     packs = _list_skills(settings.skills_dir)
     console.print(f"  skills: {len(packs)} packs in {settings.skills_dir}")
+    if args.ping_llm:
+        from vulnem.web.checks import llm_ping
+
+        console.print(f"  pinging {settings.model} (1 token) …")
+        result = llm_ping(settings.model)
+        if result["ok"]:
+            console.print(f"  [green]✓[/green] provider answered — {result['model']} "
+                          f"in {result['latency_ms']} ms")
+        else:
+            ok = False
+            console.print(f"  [red]✗[/red] {result['error']}")
     return 0 if ok else 1
 
 
@@ -809,6 +820,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_skills.set_defaults(func=cmd_skills)
 
     p_doctor = sub.add_parser("doctor", help="Check environment readiness")
+    p_doctor.add_argument("--ping-llm", action="store_true",
+                          help="Also ping the LLM provider with a 1-token call — "
+                               "validates the key and model for real")
     p_doctor.set_defaults(func=cmd_doctor)
     return parser
 

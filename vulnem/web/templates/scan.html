@@ -42,6 +42,10 @@
       <label for="model">Model override</label>
       <input type="text" id="model" name="model" value="{{ values.model }}"
              placeholder="openai/gpt-5 (litellm format)" autocomplete="off">
+      <button type="button" class="btn" id="test-llm-btn">Test connection</button>
+      <p class="hint" id="test-llm-result" hidden></p>
+      <p class="dim hint">Tests this model with the saved provider key (Setup
+        holds the keys) before you spend a scan's tokens on it.</p>
     </div>
     <div class="field">
       <label for="budget">Budget override (turns)</label>
@@ -75,4 +79,7 @@
     <button type="submit" class="btn primary">Start scan</button>
   </div>
 </form>
+{% endblock %}
+{% block scripts %}
+<script src="/static/llmtest.js"></script>
 {% endblock %}

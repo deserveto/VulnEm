@@ -410,6 +410,7 @@ main {
 .setup-banner { border: 1px solid var(--warn); }
 .setup-banner a { font-weight: 600; }
 .ok-text { color: var(--ok); font-weight: 600; }
+.err-text { color: var(--err); font-weight: 600; }
 
 /* -- authorization gate ---------------------------------------------------------- */
 

@@ -31,7 +31,7 @@ design system), `skills/` (agent methodology packs).
 Venv at `.venv` — always `.venv/Scripts/python` / `.venv/Scripts/vulnem`.
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -q        # 217 tests, no Docker/LLM needed
+.venv/Scripts/python -m pytest tests/ -q        # 234 tests, no Docker/LLM needed
 .venv/Scripts/python -m ruff check vulnem/ tests/ scripts/
 .venv/Scripts/python scripts/mock_e2e.py        # keyless full-stack, ~45s
 .venv/Scripts/python scripts/mock_resume.py     # keyless interrupt+resume e2e
@@ -61,7 +61,8 @@ docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
 - **Skills are markdown, not code** — new vuln knowledge lands in `skills/`.
 - **Root agent never touches the target**; it only delegates.
 - **Secrets never enter prompts or transcripts** (creds via `--creds` file;
-  web `.env` editor is write-only).
+  web `.env` editor is write-only; `/setup/test-llm` and `doctor --ping-llm`
+  spend the key on their one probe call and scrub it from every error).
 - Budgets bound every real run (turns + tokens).
 - Don't weaken the negative-results-are-not-findings block in
   `vulnem/agent/prompt.py`.
