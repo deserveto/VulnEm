@@ -5,32 +5,47 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from conftest import DVWA_6251, EA92, FIXTURE_RUN, requires_recorded_runs
+
 from vulnem.ui.state import RunState, format_tool_call, replay_speed_for
 
 
-def _events(run_dir: str) -> list[dict]:
-    path = Path(__file__).resolve().parent.parent / "runs" / run_dir / "transcript.jsonl"
-    return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln]
+def _events(run_dir: Path) -> list[dict]:
+    return [json.loads(ln)
+            for ln in (run_dir / "transcript.jsonl").read_text(
+                encoding="utf-8").splitlines() if ln]
 
 
+def _assert_reduced_cleanly(state: RunState, events: list[dict],
+                            min_agents: int, min_flows: int) -> None:
+    assert state.events_seen == len(events)
+    assert state.target
+    assert len(state.agents) >= min_agents
+    assert state.flow_count >= min_flows
+    assert state.findings
+    assert state.stop_reason
+    for f in state.findings:
+        assert f.severity in {"critical", "high", "medium", "low", "info"}
+        assert f.by in {a.name for a in state.agents.values()}
+
+
+def test_reducer_over_committed_fixture() -> None:
+    """The fixture run (always present, CI included) reduces losslessly."""
+    state = RunState()
+    state.apply_all(_events(FIXTURE_RUN))
+    _assert_reduced_cleanly(state, _events(FIXTURE_RUN), min_agents=3, min_flows=30)
+    assert state.blocked_count == 1 and len(state.screenshots) == 1
+    assert state.findings_total == 2
+
+
+@requires_recorded_runs
 def test_reducer_over_real_runs() -> None:
     """The two richest recorded runs must reduce without loss or crashes."""
-    for run_dir, min_agents, min_flows in (
-        ("20260815-195935-juice-shop-ea92", 4, 6000),
-        ("20260815-193336-dvwa-6251", 2, 20000),
-    ):
+    for run_dir, min_agents, min_flows in ((EA92, 4, 6000), (DVWA_6251, 2, 20000)):
+        events = _events(run_dir)
         state = RunState()
-        state.apply_all(_events(run_dir))
-        assert state.events_seen == len(_events(run_dir))
-        assert state.target, f"{run_dir}: target not captured"
-        assert len(state.agents) >= min_agents
-        assert state.flow_count >= min_flows
-        assert state.findings, f"{run_dir}: findings not captured"
-        assert state.stop_reason
-        # every filed report_finding became a FindingView with sane fields
-        for f in state.findings:
-            assert f.severity in {"critical", "high", "medium", "low", "info"}
-            assert f.by in {a.name for a in state.agents.values()}
+        state.apply_all(events)
+        _assert_reduced_cleanly(state, events, min_agents, min_flows)
 
 
 def test_reducer_agent_lifecycle() -> None:

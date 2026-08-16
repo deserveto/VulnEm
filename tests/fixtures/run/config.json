@@ -1,0 +1,16 @@
+{
+  "target": "http://juice-shop:3000",
+  "model": "openai/fixture",
+  "network": "vulnem-lab_labnet",
+  "max_turns": 60,
+  "scan_budget_turns": 60,
+  "solo": false,
+  "proxy": true,
+  "creds": null,
+  "ci": false,
+  "fail_on": null,
+  "scope_mode": "full",
+  "source": null,
+  "started_at": "2026-08-16T10:00:00+00:00",
+  "vulnem_version": "0.1.0"
+}

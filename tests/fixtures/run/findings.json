@@ -1,0 +1,45 @@
+{
+  "target": "http://juice-shop:3000",
+  "started_at": "2026-08-16T10:00:00+00:00",
+  "finished_at": "2026-08-16T10:02:31+00:00",
+  "model": "openai/fixture",
+  "summary": "Two validated findings: blind SQLi + DOM XSS.",
+  "findings": [
+    {
+      "id": "VULN-001",
+      "title": "Boolean-based blind SQL injection in product search",
+      "severity": "high",
+      "cwe": "CWE-89",
+      "cvss_vector": null,
+      "cvss_score": 7.5,
+      "description": "User input concatenates into the SQLite query.",
+      "evidence": "curl '.../search?q=orange%27%20AND%201=1--' \u2192 full list; AND 1=2 \u2192 empty",
+      "poc": "curl -s 'http://juice-shop:3000/rest/products/search?q=orange%27+AND+1=1--'",
+      "remediation": "Parameterize the query.",
+      "confidence": "high",
+      "url": "http://juice-shop:3000/rest/products/search?q=x",
+      "reported_by": "sqli-search",
+      "file": null,
+      "line": null,
+      "fix_patch": null
+    },
+    {
+      "id": "VULN-002",
+      "title": "DOM-based XSS via search query",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "cvss_vector": null,
+      "cvss_score": 6.1,
+      "description": "bypassSecurityTrustHtml sinks the fragment param.",
+      "evidence": "browser_evaluate \u2192 window.__xss === 1; screenshot artifact",
+      "poc": "Navigate to /#/search?q=<img src=x onerror=window.__xss=1>",
+      "remediation": "Sanitize before insertion.",
+      "confidence": "high",
+      "url": "http://juice-shop:3000/#/search?q=",
+      "reported_by": "client-side-xss",
+      "file": null,
+      "line": null,
+      "fix_patch": null
+    }
+  ]
+}

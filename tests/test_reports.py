@@ -9,11 +9,13 @@ import pytest
 
 pytest.importorskip("reportlab")
 
+from conftest import FIXTURE_RUN
+
 from vulnem.report.findings import Finding, FindingsReport, findings_from_json
 from vulnem.report.pdf import report_to_pdf
 from vulnem.report.sarif import LEVEL_BY_SEVERITY, report_to_sarif, write_sarif
 
-RUN_DIR = Path(__file__).resolve().parent.parent / "runs" / "20260815-195935-juice-shop-ea92"
+RUN_DIR = FIXTURE_RUN
 
 
 def _synthetic_report() -> FindingsReport:
@@ -66,7 +68,8 @@ def test_sarif_structure_and_mapping(tmp_path: Path) -> None:
     assert set(LEVEL_BY_SEVERITY) == {"critical", "high", "medium", "low", "info"}
 
 
-def test_sarif_from_real_run(tmp_path: Path) -> None:
+def test_sarif_from_run(tmp_path: Path) -> None:
+    """SARIF export from a run dir's findings.json (committed fixture)."""
     report = findings_from_json(RUN_DIR / "findings.json")
     path = write_sarif(report, tmp_path)
     data = json.loads(path.read_text(encoding="utf-8"))

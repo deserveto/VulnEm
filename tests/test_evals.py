@@ -1,10 +1,11 @@
-"""Eval harness tests: class/endpoint matching + scoring real recorded runs."""
+"""Eval harness tests: class/endpoint matching + scoring runs against GT."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
+from conftest import DVWA_6251, EA92, FIXTURE_RUN, requires_recorded_runs
 
 from vulnem.evals import (
     _endpoints_compatible,
@@ -16,7 +17,6 @@ from vulnem.evals import (
 from vulnem.report.findings import Finding, FindingsReport, findings_from_json
 
 GT_DIR = Path(__file__).resolve().parent.parent / "evals" / "ground_truth"
-RUNS = Path(__file__).resolve().parent.parent / "runs"
 
 
 def _finding(title: str, sev="high", cwe=None, url=None) -> Finding:
@@ -61,14 +61,22 @@ def test_evaluate_recall_and_fp() -> None:
     assert result.false_positives == ["Open redirect"]
 
 
+def test_score_committed_fixture_run() -> None:
+    """The fixture run scores against the juice-shop GT (always available)."""
+    gt = load_ground_truth(GT_DIR / "juice-shop.json")
+    report = findings_from_json(FIXTURE_RUN / "findings.json")
+    result = evaluate(report, gt)
+    assert result.findings_count == 2
+    assert {"js-sqli-search", "js-xss-dom-search"} <= set(result.matched_gt)
+
+
+@requires_recorded_runs
 def test_score_real_recorded_runs() -> None:
     """The two richest real runs must score sanely against their GT:
     recall > 0, and the known-validated findings must be matched."""
     for run_dir, gt_name, must_match in (
-        (RUNS / "20260815-195935-juice-shop-ea92", "juice-shop",
-         {"js-sqli-login", "js-sqli-search", "js-xss-dom-search"}),
-        (RUNS / "20260815-193336-dvwa-6251", "dvwa",
-         {"dvwa-cmd-injection", "dvwa-sqli"}),
+        (EA92, "juice-shop", {"js-sqli-login", "js-sqli-search", "js-xss-dom-search"}),
+        (DVWA_6251, "dvwa", {"dvwa-cmd-injection", "dvwa-sqli"}),
     ):
         gt = load_ground_truth(GT_DIR / f"{gt_name}.json")
         report = findings_from_json(run_dir / "findings.json")
@@ -79,8 +87,16 @@ def test_score_real_recorded_runs() -> None:
         assert result.fp_rate >= 0
 
 
+def test_run_cost_from_fixture() -> None:
+    cost = run_cost(FIXTURE_RUN)
+    assert cost["tokens"] == 283_000
+    assert cost["turns"] == 14
+    assert cost["model"] == "openai/fixture"
+
+
+@requires_recorded_runs
 def test_run_cost_from_real_run() -> None:
-    cost = run_cost(RUNS / "20260815-195935-juice-shop-ea92")
+    cost = run_cost(EA92)
     assert cost["tokens"] == 3_107_740
     assert cost["turns"] == 114
     assert cost["model"]

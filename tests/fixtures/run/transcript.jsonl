@@ -1,0 +1,66 @@
+{"ts": "2026-08-16T10:00:00", "type": "proxy_started", "sidecar": "vulnem-proxy-fixture", "network": "vulnem-lab_labnet", "scope_hosts": ["juice-shop"]}
+{"ts": "2026-08-16T10:00:00", "type": "auth_established", "ok": true, "method": "api", "detail": "API login ok", "cookie_names": ["token"], "has_bearer": true, "storage_keys": [], "login_url": "http://juice-shop:3000/#/login"}
+{"ts": "2026-08-16T10:00:00", "type": "scan_start", "target": "http://juice-shop:3000", "model": "openai/fixture", "mode": "graph", "resumed": false, "budget_turns": 60, "proxy": true, "authenticated": true, "scope_mode": "full"}
+{"ts": "2026-08-16T10:00:01", "type": "agent_start", "objective": "Orchestrate assessment", "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:00:05", "type": "tool_call", "turn": 1, "name": "read_skill", "args": {"name": "coordination/root_agent"}, "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:00:06", "type": "tool_result", "turn": 1, "name": "read_skill", "result": "---\nname: coordination/root_agent\n---\n(playbook)"}
+{"ts": "2026-08-16T10:00:20", "type": "assistant_text", "turn": 2, "text": "Decomposing the assessment.", "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:00:25", "type": "tool_call", "turn": 2, "name": "create_agent", "args": {"name": "sqli-search", "objective": "Test SQL injection on search"}, "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:00:26", "type": "agent_created", "agent_id": "a2", "agent": "sqli-search", "parent_id": "a1", "objective": "Test SQL injection on search"}
+{"ts": "2026-08-16T10:00:30", "type": "tool_call", "turn": 2, "name": "create_agent", "args": {"name": "client-side-xss", "objective": "XSS via browser"}, "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:00:31", "type": "agent_created", "agent_id": "a3", "agent": "client-side-xss", "parent_id": "a1", "objective": "XSS via browser"}
+{"ts": "2026-08-16T10:00:35", "type": "agent_status", "agent_id": "a1", "agent": "root", "from_": "running", "from": "running", "to": "waiting", "reason": "waiting for ['a2', 'a3']"}
+{"ts": "2026-08-16T10:00:40", "type": "agent_start", "objective": "Test SQL injection on search", "agent_ctx": {"id": "a2", "name": "sqli-search", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:00:41", "type": "tool_call", "turn": 1, "name": "read_skill", "args": {"name": "sql_injection"}, "agent_ctx": {"id": "a2", "name": "sqli-search", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:00:50", "type": "tool_call", "turn": 2, "name": "exec_command", "args": {"command": "curl -s 'http://juice-shop:3000/rest/products/search?q=orange'"}, "agent_ctx": {"id": "a2", "name": "sqli-search", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:00:51", "type": "tool_result", "turn": 2, "name": "exec_command", "result": "{\"exit_code\": 0, \"stdout\": \"[{\\\"name\\\":\\\"Orange Juice\\\"}]\"}", "agent_ctx": {"id": "a2", "name": "sqli-search", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:10", "type": "tool_call", "turn": 5, "name": "report_finding", "args": {"title": "Boolean-based blind SQL injection in product search", "severity": "high", "cwe": "CWE-89", "url": "http://juice-shop:3000/rest/products/search?q=x", "description": "d", "evidence": "e", "poc": "p", "remediation": "r", "confidence": "high"}, "agent_ctx": {"id": "a2", "name": "sqli-search", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:20", "type": "tool_call", "turn": 6, "name": "agent_finish", "args": {"status": "completed", "summary": "SQLi validated and filed."}, "agent_ctx": {"id": "a2", "name": "sqli-search", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:21", "type": "agent_end", "stop_reason": "agent_finish", "turns_used": 6, "total_tokens": 120000, "findings": 1, "agent_ctx": {"id": "a2", "name": "sqli-search", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:21", "type": "agent_message", "from": "sqli-search", "to": "root", "to_id": "a1", "msg_type": "completion", "priority": "high", "preview": "COMPLETION REPORT: SQLi validated and filed."}
+{"ts": "2026-08-16T10:01:22", "type": "agent_status", "agent_id": "a2", "agent": "sqli-search", "from": "running", "to": "completed", "reason": "agent_finish"}
+{"ts": "2026-08-16T10:01:22", "type": "message_delivered", "from": "sqli-search", "msg_type": "completion", "preview": "COMPLETION REPORT: SQLi validated and filed.", "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:00:41", "type": "agent_start", "objective": "XSS via browser", "agent_ctx": {"id": "a3", "name": "client-side-xss", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:00:55", "type": "tool_call", "turn": 1, "name": "browser_navigate", "args": {"url": "http://juice-shop:3000/"}, "agent_ctx": {"id": "a3", "name": "client-side-xss", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:00", "type": "tool_call", "turn": 2, "name": "browser_evaluate", "args": {"expression": "location.hash = '#/search?q=<img src=x onerror=window.__xss=1>'"}, "agent_ctx": {"id": "a3", "name": "client-side-xss", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:05", "type": "screenshot", "artifact": "artifacts/client-side-xss/fixture-xss.png", "bytes": 20480, "url": "", "agent_ctx": {"id": "a3", "name": "client-side-xss", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:15", "type": "tool_call", "turn": 4, "name": "report_finding", "args": {"title": "DOM-based XSS via search query", "severity": "high", "cwe": "CWE-79", "url": "http://juice-shop:3000/#/search?q=", "description": "d", "evidence": "window.__xss === 1", "poc": "p", "remediation": "r", "confidence": "high"}, "agent_ctx": {"id": "a3", "name": "client-side-xss", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:18", "type": "tool_call", "turn": 5, "name": "agent_finish", "args": {"status": "completed", "summary": "DOM XSS executed via browser."}, "agent_ctx": {"id": "a3", "name": "client-side-xss", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:19", "type": "agent_end", "stop_reason": "agent_finish", "turns_used": 5, "total_tokens": 98000, "findings": 1, "agent_ctx": {"id": "a3", "name": "client-side-xss", "role": "specialist", "parent_id": "a1"}}
+{"ts": "2026-08-16T10:01:19", "type": "agent_status", "agent_id": "a3", "agent": "client-side-xss", "from": "running", "to": "completed", "reason": "agent_finish"}
+{"ts": "2026-08-16T10:01:01", "type": "proxy_flow", "i": 1, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:02", "type": "proxy_flow", "i": 2, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:03", "type": "proxy_flow", "i": 3, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:04", "type": "proxy_flow", "i": 4, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:05", "type": "proxy_flow", "i": 5, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:06", "type": "proxy_flow", "i": 6, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:07", "type": "proxy_flow", "i": 7, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:08", "type": "proxy_flow", "i": 8, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:09", "type": "proxy_flow", "i": 9, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:10", "type": "proxy_flow", "i": 10, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:11", "type": "proxy_flow", "i": 11, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:12", "type": "proxy_flow", "i": 12, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:13", "type": "proxy_flow", "i": 13, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:14", "type": "proxy_flow", "i": 14, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:15", "type": "proxy_flow", "i": 15, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:16", "type": "proxy_flow", "i": 16, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:17", "type": "proxy_flow", "i": 17, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:18", "type": "proxy_flow", "i": 18, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:19", "type": "proxy_flow", "i": 19, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:20", "type": "proxy_flow", "i": 20, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:21", "type": "proxy_flow", "i": 21, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:22", "type": "proxy_flow", "i": 22, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:23", "type": "proxy_flow", "i": 23, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:24", "type": "proxy_flow", "i": 24, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:25", "type": "proxy_flow", "i": 25, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:26", "type": "proxy_flow", "i": 26, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:27", "type": "proxy_flow", "i": 27, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:28", "type": "proxy_flow", "i": 28, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:29", "type": "proxy_flow", "i": 29, "method": "GET", "host": "juice-shop", "path": "/rest/products/search?q=x", "status": 200}
+{"ts": "2026-08-16T10:01:30", "type": "proxy_flow", "i": 30, "method": "GET", "host": "juice-shop", "path": "/", "status": 200}
+{"ts": "2026-08-16T10:01:59", "type": "scope_blocked", "layer": "proxy", "host": "api.pdtm.sh", "method": "CONNECT", "reason": "out of scope (CONNECT)"}
+{"ts": "2026-08-16T10:02:10", "type": "agent_status", "agent_id": "a1", "agent": "root", "from": "waiting", "to": "running", "reason": "wait finished"}
+{"ts": "2026-08-16T10:02:30", "type": "tool_call", "turn": 3, "name": "finish_scan", "args": {"summary": "Two validated findings: blind SQLi + DOM XSS."}, "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:02:31", "type": "finish", "summary": "Two validated findings.", "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:02:31", "type": "agent_end", "stop_reason": "finish_tool", "turns_used": 3, "total_tokens": 65000, "findings": 0, "agent_ctx": {"id": "a1", "name": "root", "role": "root"}}
+{"ts": "2026-08-16T10:02:31", "type": "scan_end", "stop_reason": "finish_tool", "turns_used": 14, "total_tokens": 283000, "findings": 2}
