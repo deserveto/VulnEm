@@ -15,6 +15,7 @@ design system), `skills/` (agent methodology packs).
   sessions), `sandbox/` (Docker), `proxy/` (mitmproxy sidecar), `tools/`
   (exec/browser/proxy tools), `report/` (findings, merge, sarif, pdf,
   mdrender), `ui/` (TUI + pure reducer `state.py`), `web/` (local web app),
+  `providers.py` (provider catalog: key vars, keyless locals, examples),
   `scope.py`, `scan.py`, `cli.py`
 - `skills/*.md` — vulnerability methodology packs (markdown, not code)
 - `lab/` — docker-compose targets: juice-shop :3000, dvwa :4280, vulnapp
@@ -82,6 +83,12 @@ docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
 
 - Ruff: line-length 100, rules E,W,F,I,UP,B,SIM,RUF. Lazy imports for heavy
   deps (fastapi/docker/uvicorn imported inside functions, matching `cli.py`).
+- Provider knowledge lives ONLY in `vulnem/providers.py` (key vars verified
+  against litellm sources; several deviate from naive guesses). Never
+  re-hardcode a provider→key-var map elsewhere; unlisted prefixes use the
+  `<PREFIX>_API_KEY` convention via `providers.key_var_for`. `VULNEM_API_BASE`
+  (OpenAI-compatible endpoints) flows env → `Settings.api_base` → per-call
+  litellm `api_base`.
 - Background bash with `| tail` can zombie on Windows/Git Bash — prefer
   checking `docker images`/port state over trusting task status. Kill
   servers by PID from `netstat`, never by image name.

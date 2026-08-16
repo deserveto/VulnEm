@@ -28,8 +28,8 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 SANDBOX = "vulnem-sandbox:latest"
-KEY_VARS = ("VULNEM_LLM", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-            "OPENROUTER_API_KEY", "GROQ_API_KEY")
+KEY_VARS = ("VULNEM_LLM", "VULNEM_API_BASE", "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY")
 FAKE_CMD = [sys.executable, "-c", "print('wizard fake job')"]
 SLEEPER_CMD = [sys.executable, "-c",
                "import time; print('sleeping', flush=True); time.sleep(30)"]
@@ -172,11 +172,31 @@ def test_checks_sidecar_missing_is_only_a_warn(skills_dir: Path,
     assert by_key(checklist)["sandbox_image"].state == "ok"
 
 
-def test_checks_unknown_provider_warns(skills_dir: Path, isolated_keys) -> None:
+def test_checks_unlisted_provider_warns_with_convention(
+        skills_dir: Path, isolated_keys) -> None:
     settings = Settings(model="myprovider/model-x", skills_dir=skills_dir)
     checklist = checks.environment_checks(settings, FakeDockerClient())
     key = by_key(checklist)["provider_key"]
-    assert key.state == "warn" and "verify its key" in key.detail
+    assert key.state == "warn" and "MYPROVIDER_API_KEY" in key.detail
+    assert key not in checks.critical_failures(checklist)
+
+
+def test_checks_unlisted_provider_ok_when_convention_var_set(
+        skills_dir: Path, isolated_keys, monkeypatch) -> None:
+    monkeypatch.setenv("MYPROVIDER_API_KEY", "x")
+    settings = Settings(model="myprovider/model-x", skills_dir=skills_dir)
+    checklist = checks.environment_checks(settings, FakeDockerClient())
+    key = by_key(checklist)["provider_key"]
+    assert key.state == "ok" and "conventional" in key.detail
+    assert key not in checks.critical_failures(checklist)
+
+
+def test_checks_keyless_provider_needs_no_key(skills_dir: Path,
+                                              isolated_keys) -> None:
+    settings = Settings(model="ollama_chat/qwen3:8b", skills_dir=skills_dir)
+    checklist = checks.environment_checks(settings, FakeDockerClient())
+    key = by_key(checklist)["provider_key"]
+    assert key.state == "ok" and "no API key" in key.detail
     assert key not in checks.critical_failures(checklist)
 
 
@@ -354,12 +374,62 @@ def test_post_env_rejects_model_without_provider(wizard: SimpleNamespace) -> Non
     assert not wizard.env_path.exists()
 
 
-def test_post_env_unknown_provider(wizard: SimpleNamespace) -> None:
+def test_post_env_unlisted_provider_saves_with_convention_var(
+        wizard: SimpleNamespace, monkeypatch) -> None:
+    monkeypatch.delenv("WEIRD_API_KEY", raising=False)  # route writes it; clean up
+    resp = wizard.client.post(
+        "/setup/env",
+        data={"model": "weird/model", "api_key": "conv-key-1"},
+        follow_redirects=False)
+    assert resp.status_code == 303
+    text = wizard.env_path.read_text(encoding="utf-8")
+    assert "VULNEM_LLM=weird/model" in text
+    assert "WEIRD_API_KEY=conv-key-1" in text  # convention var, not a rejection
+    assert os.environ["WEIRD_API_KEY"] == "conv-key-1"
+
+
+def test_post_env_unlisted_provider_blank_key_names_convention_var(
+        wizard: SimpleNamespace, monkeypatch) -> None:
+    monkeypatch.delenv("WEIRD_API_KEY", raising=False)
     resp = wizard.client.post("/setup/env",
-                              data={"model": "weird/model", "api_key": "k"})
+                              data={"model": "weird/model", "api_key": ""})
     assert resp.status_code == 200
-    assert "manually" in resp.text
+    assert "WEIRD_API_KEY" in resp.text and "API key required" in resp.text
     assert not wizard.env_path.exists()
+
+
+def test_post_env_keyless_provider_needs_no_key(wizard: SimpleNamespace) -> None:
+    resp = wizard.client.post(
+        "/setup/env", data={"model": "ollama_chat/qwen3:8b", "api_key": ""},
+        follow_redirects=False)
+    assert resp.status_code == 303
+    text = wizard.env_path.read_text(encoding="utf-8")
+    assert "VULNEM_LLM=ollama_chat/qwen3:8b" in text
+    assert "API_KEY" not in text  # no key var required or written
+
+
+def test_post_env_writes_api_base(wizard: SimpleNamespace) -> None:
+    resp = wizard.client.post(
+        "/setup/env",
+        data={"model": "openai/gpt-5", "api_key": "sk-test-123",
+              "api_base": "http://localhost:11434/v1"},
+        follow_redirects=False)
+    assert resp.status_code == 303
+    text = wizard.env_path.read_text(encoding="utf-8")
+    assert "VULNEM_API_BASE=http://localhost:11434/v1" in text
+    assert os.environ["VULNEM_API_BASE"] == "http://localhost:11434/v1"
+
+
+def test_post_env_blank_api_base_leaves_existing(wizard: SimpleNamespace) -> None:
+    wizard.env_path.write_text("VULNEM_API_BASE=http://keep-me/v1\n",
+                               encoding="utf-8")
+    resp = wizard.client.post(
+        "/setup/env", data={"model": "openai/gpt-5", "api_key": "sk-k",
+                            "api_base": ""},
+        follow_redirects=False)
+    assert resp.status_code == 303
+    assert "VULNEM_API_BASE=http://keep-me/v1" in \
+        wizard.env_path.read_text(encoding="utf-8")
 
 
 def test_post_build_launches_job(wizard: SimpleNamespace) -> None:
@@ -451,6 +521,20 @@ def test_llm_ping_omits_api_key_kwarg_when_none() -> None:
 
     assert checks.llm_ping("groq/x", completion_fn=fake_completion)["ok"]
     assert "api_key" not in captured  # litellm reads the env var itself
+    assert "api_base" not in captured  # and the provider's own API by default
+
+
+def test_llm_ping_passes_api_base() -> None:
+    captured: dict = {}
+
+    def fake_completion(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(model="gpt-5")
+
+    assert checks.llm_ping("openai/gpt-5", api_key="sk-x",
+                           api_base="http://gateway:8000/v1",
+                           completion_fn=fake_completion)["ok"]
+    assert captured["api_base"] == "http://gateway:8000/v1"
 
 
 def test_llm_ping_classifies_auth_error() -> None:
@@ -499,6 +583,27 @@ def test_llm_ping_scrubs_env_key_values(monkeypatch) -> None:
     assert "gsk_env-secret-99" not in result["error"]
 
 
+def test_llm_ping_scrubs_api_base_from_error() -> None:
+    def fake_completion(**kwargs):
+        raise RuntimeError("connection refused to http://tok-abc123@gw:1/v1")
+
+    result = checks.llm_ping("openai/gpt-5", api_base="http://tok-abc123@gw:1/v1",
+                             completion_fn=fake_completion)
+    assert result["ok"] is False
+    assert "tok-abc123" not in result["error"]  # gateway URLs can embed tokens
+
+
+def test_llm_ping_scrubs_convention_var_for_unlisted(monkeypatch) -> None:
+    monkeypatch.setenv("ZORP_API_KEY", "zorp-convention-secret-77")
+
+    def fake_completion(**kwargs):
+        raise RuntimeError("rejected zorp-convention-secret-77")
+
+    result = checks.llm_ping("zorp/tiny", completion_fn=fake_completion)
+    assert result["ok"] is False
+    assert "zorp-convention-secret-77" not in result["error"]
+
+
 # -- POST /setup/test-llm ---------------------------------------------------------------
 
 
@@ -508,11 +613,17 @@ class FakePing:
     def __init__(self, result: dict | None = None) -> None:
         self.result = result or {"ok": True, "model": "gpt-5-served",
                                  "latency_ms": 7, "error": ""}
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[dict] = []
 
-    def __call__(self, model: str, *, api_key: str | None = None) -> dict:
-        self.calls.append((model, api_key or ""))
+    def __call__(self, model: str, *, api_key: str | None = None,
+                 api_base: str | None = None) -> dict:
+        self.calls.append({"model": model, "api_key": api_key or "",
+                           "api_base": api_base or ""})
         return dict(self.result)
+
+
+def _call(model: str, key: str = "", base: str = "") -> dict:
+    return {"model": model, "api_key": key, "api_base": base}
 
 
 def test_setup_page_has_test_connection_button(wizard: SimpleNamespace) -> None:
@@ -523,12 +634,23 @@ def test_setup_page_has_test_connection_button(wizard: SimpleNamespace) -> None:
     assert "/static/llmtest.js" in resp.text
 
 
+def test_setup_page_has_provider_picker(wizard: SimpleNamespace) -> None:
+    resp = wizard.client.get("/setup")
+    assert resp.status_code == 200
+    assert 'id="provider"' in resp.text and "<select" in resp.text
+    assert 'id="provider-data"' in resp.text  # embedded catalog JSON
+    assert "/static/providers.js" in resp.text
+    assert 'id="api_base"' in resp.text  # Base URL field
+    assert 'id="model-examples"' in resp.text  # datalist target
+
+
 def test_scan_page_has_test_connection_button(wizard: SimpleNamespace) -> None:
     resp = wizard.client.get("/scan")
     assert resp.status_code == 200
     assert 'id="test-llm-btn"' in resp.text  # beside the model override field
     assert 'id="test-llm-result"' in resp.text
     assert "/static/llmtest.js" in resp.text
+    assert 'id="model-examples"' in resp.text  # example datalist
 
 
 def test_post_test_llm_success_never_echoes_key(
@@ -540,7 +662,7 @@ def test_post_test_llm_success_never_echoes_key(
         json={"model": "openai/gpt-5", "api_key": "sk-test-123"})
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
-    assert ping.calls == [("openai/gpt-5", "sk-test-123")]
+    assert ping.calls == [_call("openai/gpt-5", "sk-test-123")]
     assert "sk-test-123" not in resp.text  # write-only: never echoed back
     assert not wizard.env_path.exists()  # testing saves nothing
     assert "OPENAI_API_KEY" not in os.environ
@@ -554,7 +676,7 @@ def test_post_test_llm_blank_key_uses_env_key(wizard: SimpleNamespace,
     resp = wizard.client.post(
         "/setup/test-llm", json={"model": "openai/gpt-5", "api_key": ""})
     assert resp.status_code == 200
-    assert ping.calls == [("openai/gpt-5", "env-key-xyz")]
+    assert ping.calls == [_call("openai/gpt-5", "env-key-xyz")]
 
 
 def test_post_test_llm_blank_key_falls_back_to_env_file(
@@ -566,7 +688,7 @@ def test_post_test_llm_blank_key_falls_back_to_env_file(
     resp = wizard.client.post(
         "/setup/test-llm", json={"model": "openai/gpt-5", "api_key": ""})
     assert resp.status_code == 200
-    assert ping.calls == [("openai/gpt-5", "file-key-abc")]
+    assert ping.calls == [_call("openai/gpt-5", "file-key-abc")]
 
 
 def test_post_test_llm_no_key_anywhere(wizard: SimpleNamespace) -> None:
@@ -578,15 +700,80 @@ def test_post_test_llm_no_key_anywhere(wizard: SimpleNamespace) -> None:
     assert wizard.app.state.llm_ping_fn.calls == []  # probe never launched
 
 
+def test_post_test_llm_unlisted_provider_uses_convention_var(
+        wizard: SimpleNamespace, monkeypatch) -> None:
+    monkeypatch.setenv("ZORP_API_KEY", "zorp-env-key")
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "zorp/tiny-xl", "api_key": ""})
+    assert resp.status_code == 200  # no "unknown provider" rejection anymore
+    assert ping.calls == [_call("zorp/tiny-xl", "zorp-env-key")]
+
+
+def test_post_test_llm_unlisted_provider_no_convention_var(
+        wizard: SimpleNamespace) -> None:
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "zorp/tiny-xl", "api_key": ""})
+    assert resp.status_code == 400 and "ZORP_API_KEY" in resp.text
+    assert ping.calls == []
+
+
+def test_post_test_llm_keyless_provider_probes_without_key(
+        wizard: SimpleNamespace) -> None:
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "ollama_chat/qwen3:8b"})
+    assert resp.status_code == 200  # no 400: local providers need no key
+    assert ping.calls == [_call("ollama_chat/qwen3:8b")]
+
+
+def test_post_test_llm_typed_api_base_wins(wizard: SimpleNamespace) -> None:
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm",
+        json={"model": "openai/gpt-5", "api_key": "sk-k",
+              "api_base": "http://typed-gateway:9000/v1"})
+    assert resp.status_code == 200
+    assert ping.calls[0]["api_base"] == "http://typed-gateway:9000/v1"
+    assert "typed-gateway" not in resp.text  # base URL never echoed either
+
+
+def test_post_test_llm_blank_api_base_uses_saved(wizard: SimpleNamespace,
+                                                 monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    monkeypatch.setenv("VULNEM_API_BASE", "http://saved-env:1/v1")
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "openai/gpt-5", "api_key": ""})
+    assert resp.status_code == 200
+    assert ping.calls[0]["api_base"] == "http://saved-env:1/v1"
+
+
+def test_post_test_llm_blank_api_base_falls_back_to_env_file(
+        wizard: SimpleNamespace, monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "env-key")
+    wizard.env_path.write_text("VULNEM_API_BASE=http://saved-file:2/v1\n",
+                               encoding="utf-8")
+    ping = FakePing()
+    wizard.app.state.llm_ping_fn = ping
+    resp = wizard.client.post(
+        "/setup/test-llm", json={"model": "openai/gpt-5", "api_key": ""})
+    assert resp.status_code == 200
+    assert ping.calls[0]["api_base"] == "http://saved-file:2/v1"
+
+
 def test_post_test_llm_validation(wizard: SimpleNamespace) -> None:
     ping = FakePing()
     wizard.app.state.llm_ping_fn = ping
     resp = wizard.client.post("/setup/test-llm",
                               json={"model": "gpt-5-no-slash", "api_key": "k"})
     assert resp.status_code == 400 and "provider prefix" in resp.text
-    resp = wizard.client.post("/setup/test-llm",
-                              json={"model": "weird/model", "api_key": "k"})
-    assert resp.status_code == 400 and "manually" in resp.text
     resp = wizard.client.post("/setup/test-llm",
                               content=b"not json",
                               headers={"Content-Type": "application/json"})

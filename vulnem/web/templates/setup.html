@@ -27,18 +27,31 @@
 
 <section class="pane form-card">
   <h2>Model + API key</h2>
-  <p class="dim">Current model <code>{{ model }}</code> — API key
-    {% if key_set %}<span class="ok-text">set</span>{% else %}<span class="warn">not set</span>{% endif %}
-    {% if key_var %}(<code>{{ key_var }}</code>){% endif %}. The key value is
-    never shown after you save it.</p>
+  <p class="dim">Current model <code>{{ model }}</code> —
+    {% if keyless %}this provider needs <span class="ok-text">no API key</span>
+    {% else %}API key
+      {% if key_set %}<span class="ok-text">set</span>
+      {% else %}<span class="warn">not set</span>{% endif %}
+      {% if key_var %}(<code>{{ key_var }}</code>){% endif %}{% endif %}.
+      The key value is never shown after you save it.</p>
   <form method="post" action="/setup/env">
+    <div class="field">
+      <label for="provider">Provider</label>
+      <select id="provider" name="provider">
+        {% for prefix, row in provider_map.items() %}
+        <option value="{{ prefix }}"{% if prefix == current_prefix %} selected{% endif %}>{{ row.label }}</option>
+        {% endfor %}
+        <option value="custom"{% if current_prefix not in provider_map %} selected{% endif %}>Custom / other (litellm prefix)</option>
+      </select>
+    </div>
     <div class="field">
       <label for="model">Model (litellm format)</label>
       <input type="text" id="model" name="model" required value="{{ model }}"
-             placeholder="openai/gpt-5" autocomplete="off" spellcheck="false">
-      <p class="dim hint">The provider prefix picks the key variable:
-        openai → OPENAI_API_KEY, anthropic → ANTHROPIC_API_KEY,
-        openrouter → OPENROUTER_API_KEY, groq → GROQ_API_KEY.</p>
+             placeholder="openai/gpt-5" list="model-examples"
+             autocomplete="off" spellcheck="false">
+      <datalist id="model-examples"></datalist>
+      <p class="dim hint" id="model-hint">Any litellm provider string works;
+        unlisted providers use the &lt;PREFIX&gt;_API_KEY convention.</p>
     </div>
     <div class="field">
       <label for="api_key">API key</label>
@@ -46,6 +59,15 @@
              placeholder="{% if key_set %}leave blank to keep the existing key{% else %}sk-...{% endif %}">
       <p class="dim hint">Written to <code>.env</code> in the project root and to
         this server's environment — scans started from here use it immediately.</p>
+    </div>
+    <div class="field">
+      <label for="api_base">Base URL (optional)</label>
+      <input type="url" id="api_base" name="api_base" autocomplete="off"
+             spellcheck="false"
+             placeholder="{% if api_base_set %}leave blank to keep the existing base URL{% else %}https://my-gateway/v1 — ollama, vLLM, LiteLLM proxy, gateways{% endif %}">
+      <p class="dim hint">Routes every provider call through this
+        OpenAI-compatible endpoint (<code>{{ api_base_var }}</code>). Leave empty
+        to use the provider's own API.</p>
     </div>
     <div class="form-actions">
       <button type="button" class="btn" id="test-llm-btn">Test connection</button>
@@ -89,5 +111,7 @@
 </section>
 {% endblock %}
 {% block scripts %}
+<script type="application/json" id="provider-data">{{ provider_map | tojson }}</script>
+<script src="/static/providers.js"></script>
 <script src="/static/llmtest.js"></script>
 {% endblock %}

@@ -2,7 +2,9 @@
 
 Settings come from environment variables (VULNEM_*) and an optional .env file
 in the project root. Provider API keys (OPENAI_API_KEY, ANTHROPIC_API_KEY, ...)
-are read directly by litellm from the environment.
+are read directly by litellm from the environment; VULNEM_API_BASE optionally
+points every provider call at an OpenAI-compatible endpoint (ollama, vLLM,
+LiteLLM proxy, gateways) and is passed to litellm per-call as ``api_base``.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ class Settings:
     """Everything a scan needs, resolved once at startup."""
 
     model: str = DEFAULT_LLM
+    api_base: str | None = None
     max_turns: int = DEFAULT_MAX_TURNS
     child_max_turns: int = DEFAULT_CHILD_MAX_TURNS
     max_agents: int = DEFAULT_MAX_AGENTS
@@ -48,6 +51,7 @@ class Settings:
         _load_dotenv(root / ".env")
         return cls(
             model=os.environ.get("VULNEM_LLM", DEFAULT_LLM),
+            api_base=os.environ.get("VULNEM_API_BASE") or None,
             max_turns=int(os.environ.get("VULNEM_MAX_TURNS", DEFAULT_MAX_TURNS)),
             child_max_turns=int(
                 os.environ.get("VULNEM_CHILD_MAX_TURNS", DEFAULT_CHILD_MAX_TURNS)

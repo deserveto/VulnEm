@@ -48,10 +48,14 @@ def _resolve_paths(settings: Settings) -> Settings:
 def _check_model_ready(settings: Settings) -> None:
     import os
 
-    if settings.model.startswith("openai/") and not os.environ.get("OPENAI_API_KEY"):
+    from vulnem import providers
+
+    key_var = providers.key_var_for(settings.model)
+    if key_var and not os.environ.get(key_var):
         console.print(
-            "[yellow]Warning:[/yellow] OPENAI_API_KEY is not set and model is "
-            f"{settings.model}. Set it in .env or the environment."
+            "[yellow]Warning:[/yellow] "
+            f"{key_var} is not set and model is {settings.model}. "
+            "Set it in .env or the environment."
         )
 
 
@@ -685,28 +689,34 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         console.print(f"  [red]✗[/red] Docker not reachable: {exc}")
 
     console.print(f"  model: {settings.model}")
-    provider = settings.model.split("/", 1)[0]
-    key_var = {
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-        "groq": "GROQ_API_KEY",
-    }.get(provider)
-    if key_var:
+    from vulnem import providers
+
+    provider = providers.lookup(settings.model)
+    key_var = providers.key_var_for(settings.model)
+    if provider is not None and key_var is None:
+        console.print(f"  [green]✓[/green] {provider.label} needs no API key")
+    elif key_var:
         if os.environ.get(key_var):
             console.print(f"  [green]✓[/green] {key_var} is set")
+        elif provider is None:
+            console.print(f"  [yellow]![/yellow] unlisted provider — set {key_var} "
+                          "if it uses the conventional name")
         else:
             ok = False
             console.print(f"  [yellow]![/yellow] {key_var} is NOT set")
     else:
-        console.print("  (custom provider — verify its API key yourself)")
+        console.print("  model lacks a provider prefix — expected litellm format "
+                      "like openai/gpt-5")
+    if getattr(settings, "api_base", None):
+        console.print("  API base: VULNEM_API_BASE is set (OpenAI-compatible endpoint)")
     packs = _list_skills(settings.skills_dir)
     console.print(f"  skills: {len(packs)} packs in {settings.skills_dir}")
     if args.ping_llm:
         from vulnem.web.checks import llm_ping
 
         console.print(f"  pinging {settings.model} (1 token) …")
-        result = llm_ping(settings.model)
+        result = llm_ping(settings.model,
+                          api_base=getattr(settings, "api_base", None))
         if result["ok"]:
             console.print(f"  [green]✓[/green] provider answered — {result['model']} "
                           f"in {result['latency_ms']} ms")

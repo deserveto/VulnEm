@@ -1,7 +1,8 @@
 /* VulnEm "Test connection" (Setup + New scan model override): one minimal
    provider round-trip with the model in the form. On Setup a typed API key
-   is used when present; otherwise (and on New scan) the saved key is tested.
-   All injected text goes through textContent — never innerHTML. */
+   and Base URL are used when present; otherwise (and on New scan) the saved
+   values are tested. All injected text goes through textContent — never
+   innerHTML. */
 "use strict";
 
 const testBtn = document.getElementById("test-llm-btn");
@@ -18,6 +19,8 @@ if (testBtn && testOut) {
     const model = document.getElementById("model").value.trim();
     const apiKeyInput = document.getElementById("api_key"); // Setup only
     const apiKey = apiKeyInput ? apiKeyInput.value.trim() : "";
+    const apiBaseInput = document.getElementById("api_base"); // Setup only
+    const apiBase = apiBaseInput ? apiBaseInput.value.trim() : "";
     const label = testBtn.textContent;
     testBtn.disabled = true;
     testBtn.textContent = "Testing…";
@@ -26,7 +29,7 @@ if (testBtn && testOut) {
       const resp = await fetch("/setup/test-llm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: model, api_key: apiKey }),
+        body: JSON.stringify({ model: model, api_key: apiKey, api_base: apiBase }),
         cache: "no-store",
       });
       const data = await resp.json().catch(() => null);

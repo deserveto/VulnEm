@@ -7,6 +7,10 @@ checked for PRESENCE only — a variable's value never enters a Check. The one
 deliberate exception is :func:`llm_ping`: an on-demand 1-token round-trip the
 user explicitly asks for, whose result is scrubbed of key values before it
 leaves this module.
+
+Provider knowledge (key vars, keyless locals, examples) lives in
+:mod:`vulnem.providers` — the shared catalog, so doctor and the web UI can
+never drift apart again.
 """
 
 from __future__ import annotations
@@ -17,16 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from vulnem import providers
 from vulnem.config import Settings
-
-#: litellm provider prefix -> the env var litellm reads the key from
-#: (same map as ``cmd_doctor``).
-PROVIDER_KEY_VARS = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-    "groq": "GROQ_API_KEY",
-}
 
 #: checks whose failure blocks scanning (the / banner + the safe-demo gate).
 CRITICAL_KEYS = frozenset({"docker", "sandbox_image", "provider_key", "skills"})
@@ -123,14 +119,28 @@ def _image_checks(client: Any, settings: Settings) -> list[Check]:
 
 
 def _provider_key_check(settings: Settings) -> Check:
-    provider = settings.model.split("/", 1)[0]
-    key_var = PROVIDER_KEY_VARS.get(provider)
+    provider = providers.lookup(settings.model)
+    if provider is not None and provider.key_var is None:
+        return Check("provider_key", "Provider API key", "ok",
+                     f"{provider.label} needs no API key")
+    key_var = providers.key_var_for(settings.model)
     if key_var is None:
         return Check("provider_key", "Provider API key", "warn",
-                     "custom provider — verify its key yourself")
+                     "no provider prefix — set a litellm model like "
+                     "openai/gpt-5")
+    listed = provider is not None
     if os.environ.get(key_var):
-        return Check("provider_key", "Provider API key", "ok",
-                     f"{key_var} is set")
+        detail = f"{key_var} is set"
+        if not listed:
+            detail += " (unlisted provider — conventional var assumed)"
+        return Check("provider_key", "Provider API key", "ok", detail)
+    if not listed:
+        # Unlisted providers may use a nonstandard credential scheme, so an
+        # unset conventional var stays a warning (scan-blocking only when the
+        # provider is catalogued and definitively key-based).
+        return Check("provider_key", "Provider API key", "warn",
+                     f"unlisted provider — set {key_var} if it uses the "
+                     "conventional name")
     return Check("provider_key", "Provider API key", "fail",
                  f"{key_var} is NOT set", fix="set_key")
 
@@ -153,16 +163,18 @@ _ERROR_MAX_CHARS = 300
 
 
 def llm_ping(model: str, *, api_key: str | None = None,
+             api_base: str | None = None,
              timeout: float = _PING_TIMEOUT_S,
              completion_fn: Any | None = None) -> dict:
     """One minimal provider round-trip for the setup page's Test button.
 
     Sends a 1-token ``ping`` completion with retries off, using the exact
-    model + key a scan would use. ``completion_fn`` is the test seam
-    (None -> ``litellm.completion``), mirroring AgentSession's injection
-    idiom. Returns ``{"ok", "model", "latency_ms", "error"}`` where ``model``
-    is the served model the provider reports; error text is classified,
-    scrubbed of key values, and truncated — a key never leaves this function.
+    model + key (+ optional OpenAI-compatible base URL) a scan would use.
+    ``completion_fn`` is the test seam (None -> ``litellm.completion``),
+    mirroring AgentSession's injection idiom. Returns ``{"ok", "model",
+    "latency_ms", "error"}`` where ``model`` is the served model the provider
+    reports; error text is classified, scrubbed of key values, and truncated
+    — a key never leaves this function.
     """
     import litellm
 
@@ -176,11 +188,13 @@ def llm_ping(model: str, *, api_key: str | None = None,
     }
     if api_key:
         kwargs["api_key"] = api_key
+    if api_base:
+        kwargs["api_base"] = api_base
     start = time.perf_counter()
     try:
         response = fn(**kwargs)
     except Exception as exc:  # classified below; never re-raised to the route
-        error = _scrub_secrets(_classify_error(exc), api_key)
+        error = _scrub_secrets(_classify_error(exc), api_key, api_base, model)
         return {"ok": False, "model": model,
                 "latency_ms": _elapsed_ms(start), "error": error[:_ERROR_MAX_CHARS]}
     served = str(getattr(response, "model", "") or "")
@@ -213,14 +227,22 @@ def _classify_error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _scrub_secrets(text: str, submitted_key: str | None = None) -> str:
-    """Replace every provider key value (plus the submitted one) with ``***``.
+def _scrub_secrets(text: str, submitted_key: str | None = None,
+                   api_base: str | None = None,
+                   model: str | None = None) -> str:
+    """Replace every provider key value (plus submitted secrets) with ``***``.
 
     litellm errors don't normally embed keys, but a custom base URL can echo
-    one back — defense in depth for the write-only rule.
+    one back — defense in depth for the write-only rule. The submitted base
+    URL is scrubbed too (gateways sometimes embed tokens in URLs).
     """
-    values = {submitted_key,
-              *(os.environ.get(var) for var in PROVIDER_KEY_VARS.values())}
+    key_vars = providers.known_key_vars()
+    if model:
+        current = providers.key_var_for(model)
+        if current:  # covers the unlisted-provider conventional var too
+            key_vars.add(current)
+    values = {submitted_key, api_base,
+              *(os.environ.get(var) for var in key_vars)}
     for value in values:
         if value and len(value) >= 8:  # short strings would mangle messages
             text = text.replace(value, "***")

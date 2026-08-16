@@ -164,13 +164,17 @@ class AgentSession:
             try:
                 if self.completion_fn is not None:
                     return self.completion_fn(self.messages, self.tool_schemas())
-                return litellm.completion(
-                    model=self.settings.model,
-                    messages=self.messages,  # type: ignore[arg-type]
-                    tools=self.tool_schemas(),
-                    timeout=_COMPLETION_TIMEOUT_S,
-                    num_retries=2,
-                )
+                kwargs: dict[str, Any] = {
+                    "model": self.settings.model,
+                    "messages": self.messages,  # type: ignore[arg-type]
+                    "tools": self.tool_schemas(),
+                    "timeout": _COMPLETION_TIMEOUT_S,
+                    "num_retries": 2,
+                }
+                api_base = getattr(self.settings, "api_base", None)
+                if api_base:  # OpenAI-compatible endpoint (VULNEM_API_BASE)
+                    kwargs["api_base"] = api_base
+                return litellm.completion(**kwargs)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

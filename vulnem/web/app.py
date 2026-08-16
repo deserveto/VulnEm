@@ -30,6 +30,7 @@ from pathlib import Path
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
 
+from vulnem import providers
 from vulnem.config import Settings
 from vulnem.ui.state import RunState, StreamItem
 from vulnem.web import checks, envfile, jobs, scans, serialize
@@ -278,6 +279,8 @@ def create_app(settings: Settings, jobs_manager: jobs.JobManager | None = None):
     def _render_scan(request: Request, error: str, raw: dict):
         return templates.TemplateResponse(request=request, name="scan.html", context={
             "error": error, "values": _form_values(raw), "presets": _preset_rows(),
+            "model_examples": list(getattr(providers.lookup(settings.model),
+                                           "examples", ()) or ()),
         })
 
     def _render_authorize(request: Request, form: scans.ScanForm, error: str = ""):
@@ -411,15 +414,21 @@ def create_app(settings: Settings, jobs_manager: jobs.JobManager | None = None):
         def ok(key: str) -> bool:
             return key in by_key and by_key[key].state == "ok"
 
-        key_var = checks.PROVIDER_KEY_VARS.get(settings.model.split("/", 1)[0])
+        key_var = providers.key_var_for(settings.model) or ""
+        keyless = providers.is_keyless(settings.model)
         build_job = _running_job(BUILD_JOB_NAME)
         return {
             "checks": checklist,
             "error": error,
             "saved": saved,
             "model": model_value if model_value is not None else settings.model,
-            "key_var": key_var or "",
+            "key_var": key_var,
             "key_set": bool(key_var and os.environ.get(key_var)),
+            "keyless": keyless,
+            "provider_map": {row["prefix"]: row for row in providers.picker_rows()},
+            "current_prefix": providers.prefix_of(settings.model),
+            "api_base_var": "VULNEM_API_BASE",
+            "api_base_set": bool(os.environ.get("VULNEM_API_BASE")),
             "sandbox_ok": ok("sandbox_image"),
             "demo_ready": _demo_ready(checklist),
             "build_job_id": build_job.id if build_job else "",
@@ -447,27 +456,31 @@ def create_app(settings: Settings, jobs_manager: jobs.JobManager | None = None):
 
     @app.post("/setup/env")
     async def setup_env(request: Request):
-        """Save VULNEM_LLM (+ provider key) to .env and the live environment.
+        """Save VULNEM_LLM (+ provider key, + optional base URL) to .env.
 
-        The key is write-only: it lands in .env and os.environ, never in a
-        response, template context, or job log.
+        Writes ``VULNEM_LLM``, the provider's key var (catalogued or the
+        ``<PREFIX>_API_KEY`` convention for unlisted providers), and — when
+        filled in — ``VULNEM_API_BASE`` for OpenAI-compatible endpoints
+        (ollama, vLLM, LiteLLM proxy, gateways). The key is write-only: it
+        lands in .env and os.environ, never in a response, template context,
+        or job log.
         """
         form_data = await request.form()
         model = str(form_data.get("model") or "").strip()
         api_key = str(form_data.get("api_key") or "").strip()
+        api_base = str(form_data.get("api_base") or "").strip()
         checklist = get_checks(app, settings)  # cached: re-render stays cheap
         if not model or "/" not in model:
             return _render_setup(
                 request, checklist, error="Model must be a litellm string with a "
                 "provider prefix, e.g. openai/gpt-5.", model_value=model)
-        provider = model.split("/", 1)[0]
-        key_var = checks.PROVIDER_KEY_VARS.get(provider)
-        if key_var is None:
-            return _render_setup(
-                request, checklist, error=f"Unknown provider {provider!r} — set "
-                "its key env var manually in .env.", model_value=model)
+        key_var = providers.key_var_for(model)
         updates = {"VULNEM_LLM": model}
-        if api_key:
+        if api_base:
+            updates["VULNEM_API_BASE"] = api_base
+        if key_var is None:  # catalogued keyless provider (e.g. ollama)
+            pass
+        elif api_key:
             updates[key_var] = api_key
         elif (key_var not in envfile.read_env(app.state.env_path)
                 and not os.environ.get(key_var)):
@@ -485,10 +498,14 @@ def create_app(settings: Settings, jobs_manager: jobs.JobManager | None = None):
         """On-demand provider round-trip for the Model + API key card.
 
         Tests the values currently typed in the form — a blank key field
-        falls back to the saved key (live env, then .env) — without saving
-        anything. The key is spent on the one call only: never persisted,
-        logged, or echoed back. ``app.state.llm_ping_fn`` is the test seam,
-        mirroring ``app.state.docker_client``.
+        falls back to the saved key (live env, then .env), a blank base URL
+        to the saved ``VULNEM_API_BASE`` — without saving anything. Any
+        litellm provider works: catalogued ones resolve their key var,
+        unlisted ones the ``<PREFIX>_API_KEY`` convention, catalogued
+        keyless providers (ollama) probe with no key. The key is spent on
+        the one call only: never persisted, logged, or echoed back.
+        ``app.state.llm_ping_fn`` is the test seam, mirroring
+        ``app.state.docker_client``.
         """
         try:
             payload = await request.json()
@@ -499,25 +516,28 @@ def create_app(settings: Settings, jobs_manager: jobs.JobManager | None = None):
                                  "with model and api_key."}, status_code=400)
         model = str(payload.get("model") or "").strip()
         api_key = str(payload.get("api_key") or "").strip()
+        api_base = str(payload.get("api_base") or "").strip()
         if not model or "/" not in model:
             return JSONResponse({"ok": False, "error": "Model must be a litellm "
                                  "string with a provider prefix, e.g. "
                                  "openai/gpt-5."}, status_code=400)
-        provider = model.split("/", 1)[0]
-        key_var = checks.PROVIDER_KEY_VARS.get(provider)
-        if key_var is None:
-            return JSONResponse({"ok": False, "error": f"Unknown provider "
-                                 f"{provider!r} — set its key env var manually "
-                                 "in .env."}, status_code=400)
-        if not api_key:  # blank field: test the already-saved key instead
-            api_key = (os.environ.get(key_var)
-                       or envfile.read_env(app.state.env_path).get(key_var) or "")
-        if not api_key:
-            return JSONResponse({"ok": False, "error": f"No API key for "
-                                 f"{key_var} — set it on the Setup page "
-                                 "first."}, status_code=400)
+        key_var = providers.key_var_for(model)
+        if key_var is not None:  # keyless providers probe without a key
+            if not api_key:  # blank field: test the already-saved key instead
+                api_key = (os.environ.get(key_var)
+                           or envfile.read_env(app.state.env_path).get(key_var)
+                           or "")
+            if not api_key:
+                return JSONResponse({"ok": False, "error": f"No API key for "
+                                     f"{key_var} — set it on the Setup page "
+                                     "first."}, status_code=400)
+        if not api_base:
+            api_base = (os.environ.get("VULNEM_API_BASE")
+                        or envfile.read_env(app.state.env_path)
+                        .get("VULNEM_API_BASE") or "")
         ping = getattr(app.state, "llm_ping_fn", checks.llm_ping)
-        result = await asyncio.to_thread(ping, model, api_key=api_key)
+        result = await asyncio.to_thread(
+            ping, model, api_key=api_key or None, api_base=api_base or None)
         return JSONResponse(result)  # probe failure is 200 + ok:false
 
     @app.post("/setup/build")

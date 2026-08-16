@@ -22,8 +22,9 @@ python -m venv .venv && .venv/Scripts/activate   # Windows (use bin/activate on 
 pip install -e ".[dev]"
 
 # 2. Configure the LLM (litellm format) — copy .env.example to .env
-#    VULNEM_LLM=openai/gpt-5
-#    OPENAI_API_KEY=sk-...
+#    VULNEM_LLM=openai/gpt-5        # any litellm provider: anthropic/, groq/,
+#    OPENAI_API_KEY=sk-...           # gemini/, deepseek/, xai/, ollama_chat/, ...
+#    # optional gateway: VULNEM_API_BASE=http://localhost:11434/v1
 
 # 3. Build the sandbox image (~5-10 min first time)
 vulnem build
@@ -199,8 +200,9 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
 
 | Env var | Default | Meaning |
 | --- | --- | --- |
-| `VULNEM_LLM` | `openai/gpt-5` | litellm model string (`anthropic/claude-...`, `openrouter/...`, ...) |
-| `OPENAI_API_KEY` etc. | — | provider keys, read by litellm |
+| `VULNEM_LLM` | `openai/gpt-5` | litellm model string — any provider (`anthropic/claude-...`, `groq/...`, `gemini/...`, `ollama_chat/...`, ...); the Setup page has a provider picker with current examples, and unlisted providers work via the `<PREFIX>_API_KEY` convention |
+| provider keys | — | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `TOGETHERAI_API_KEY`, ... — read by litellm; the catalog in `vulnem/providers.py` maps each prefix to its var |
+| `VULNEM_API_BASE` | — | optional: route every provider call through an OpenAI-compatible endpoint (ollama, vLLM, LiteLLM proxy, gateways) |
 | `VULNEM_MAX_TURNS` | `60` | per-agent turn cap (root/solo) |
 | `VULNEM_CHILD_MAX_TURNS` | `30` | default turn cap for specialists |
 | `VULNEM_MAX_AGENTS` | `8` | agent cap for the graph |

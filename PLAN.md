@@ -268,6 +268,21 @@ launch is a real `python -m vulnem.cli ...` subprocess.
   list with a "merged" chip, and open as report pages. Merging different
   target hosts is refused. Covered by unit + CLI tests and the mock e2e
   self-merge idempotence check.
+- **Any-provider model support** (2026-08-17) — `vulnem/providers.py`: the
+  provider catalog (key var per litellm prefix, verified against litellm
+  1.96.x — including the non-obvious `PERPLEXITYAI_API_KEY` /
+  `TOGETHERAI_API_KEY` / `FIREWORKS_AI_API_KEY`; keyless locals like
+  `ollama_chat`; current example models). Any litellm string is now
+  accepted everywhere (Setup save, test-llm, scan override, doctor):
+  unlisted providers fall back to the `<PREFIX>_API_KEY` convention
+  instead of being rejected; catalogued keyless providers skip the
+  key-required guards. Setup gained a provider picker (datalist examples +
+  dynamic hint, `static/providers.js`) and an optional write-only Base URL
+  (`VULNEM_API_BASE`) routing every call through OpenAI-compatible
+  endpoints (ollama, vLLM, LiteLLM proxy, gateways) — passed per-call as
+  litellm `api_base` from `Settings.api_base` in the agent runtime and in
+  `llm_ping`. The web/doctor key-var maps that used to drift in two
+  places are now one module.
 - **Resume-after-interrupt fixed + live-covered** (2026-08-16) — the
   operator-interrupt path (`Ctrl+C` → snapshot → `vulnem resume`) was
   broken in the field: `run_scan` awaited the root task directly, so a
