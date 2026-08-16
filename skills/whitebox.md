@@ -36,6 +36,10 @@ the workflow, not the standards — every finding still needs dynamic proof.
 4. **Validate dynamically** against the live target. The code may be dead,
    guarded elsewhere, or the sink may be unreachable with remote input.
    A finding without a reproduced PoC is a hypothesis, not a finding.
+   Example: a hardcoded/placeholder secret found in source is only real if
+   you USE it — sign or forge a token with it and send it; if the server
+   rejects it, the deployment sets a real secret and the code string is
+   dev-only noise.
 
 5. **File with precision**:
    - `file` + `line` must point at the vulnerable statement (relative to
@@ -46,6 +50,11 @@ the workflow, not the standards — every finding still needs dynamic proof.
      lines from the source so the patch applies.
    - Evidence: BOTH the source line (with path:line) and the dynamic
      command + response that proves exploitability.
+   - If you could NOT reproduce it live, say so instead of faking a proof:
+     confidence `low`, evidence starting `SOURCE-LEAD (not dynamically
+     validated)`, and the poc replaced by the exact check a human should
+     run. Static output (grep/cat/semgrep) presented as a PoC is a
+     misreport — the worst failure mode a white-box agent has.
 
 ## Fix patterns that hold up
 

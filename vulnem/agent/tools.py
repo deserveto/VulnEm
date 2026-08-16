@@ -117,7 +117,11 @@ SCHEMA_BY_NAME: dict[str, dict[str, Any]] = {
                 "File a VALIDATED vulnerability finding. Only call this after "
                 "reproducing the issue and capturing evidence. PoC must let a "
                 "human reproduce it step by step; evidence must contain the "
-                "actual command and response output."
+                "actual command and response output. Exception — source "
+                "locations you could NOT reproduce against the live target: "
+                "file them with confidence 'low' and begin the evidence with "
+                "'SOURCE-LEAD (not dynamically validated)'; static output "
+                "(grep/cat/semgrep) is a lead, never a poc."
             ),
             "parameters": {
                 "type": "object",

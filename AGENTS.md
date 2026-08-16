@@ -29,13 +29,15 @@ design system), `skills/` (agent methodology packs).
 Venv at `.venv` — always `.venv/Scripts/python` / `.venv/Scripts/vulnem`.
 
 ```bash
-.venv/Scripts/python -m pytest tests/ -q        # 170 tests, no Docker/LLM needed
+.venv/Scripts/python -m pytest tests/ -q        # 204 tests, no Docker/LLM needed
 .venv/Scripts/python -m ruff check vulnem/ tests/ scripts/
-.venv/Scripts/python scripts/mock_e2e.py        # keyless full-stack, ~21s
+.venv/Scripts/python scripts/mock_e2e.py        # keyless full-stack, ~45s
 docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
 ```
 
-- `mock_e2e.py` MUST exit 1 (findings found). rc 0 or 2 = regression.
+- `mock_e2e.py` wrapper exits 0 when every check passes (2 = regression);
+  it internally asserts the scripted demo scan itself exits 1 (findings
+  found, the CI fail-on-findings contract).
 - Tests must pass on a fresh checkout: runs/-dependent tests are skipif-gated
   in `tests/conftest.py`; web tests use the fixture run or tmp_path only.
 - `.env` holds real provider keys — never commit, print, or echo its values.

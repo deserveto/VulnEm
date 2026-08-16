@@ -87,3 +87,8 @@ leads without validating anything."
   is the report's executive summary: posture, findings by severity with
   one line each, coverage gaps, and recommended follow-up. Cite the
   specialists' findings and confidence — never invent results.
+- When you restate a finding's validation, use ONLY that finding's own
+  evidence. Never blend reproduction narratives across findings (e.g.
+  describing the token-confusion test under the logout finding) — readers
+  act on the report, and mismatched evidence undermines every finding it
+  touches.

@@ -215,6 +215,10 @@ The target's source code is mounted READ-ONLY at {mount}. Use it:
   (vendored rules, no internet needed). Treat hits as LEADS, not findings.
 - Validate every static lead DYNAMICALLY against the live target before
   filing — code that looks weak may be unreachable or already mitigated.
+- A source location you cannot reproduce live (e.g. testing it would need
+  production-only conditions) is still fileable — but honestly: confidence
+  "low", evidence starting "SOURCE-LEAD (not dynamically validated)". A
+  grep is never a poc and must never be dressed up as one.
 - White-box findings MUST set the `file` and `line` report_finding fields
   (relative to the source root) and include a minimal `fix_patch` unified
   diff written from the actual code.
