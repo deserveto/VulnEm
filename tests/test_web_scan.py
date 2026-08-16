@@ -407,3 +407,54 @@ def test_stop_route(client: TestClient, runs_dir: Path, tmp_path: Path) -> None:
     assert wait_until(lambda: mgr.get(job.id).status == "stopped")
     argv = stop_client.get(f"/jobs/{job.id}/status.json").json()["argv"]
     assert argv[0] == "scan"  # display argv survives the stop round-trip
+
+
+# -- GET /browse (folder picker for the white-box source directory) -------------
+
+
+def test_browse_lists_subdirs_sorted_and_filters_noise(
+        client: TestClient, tmp_path: Path) -> None:
+    root = tmp_path / "pickroot"
+    root.mkdir()
+    for name in ("app", "zeta", ".hidden", "$Recycle.Bin"):
+        (root / name).mkdir()
+    (root / "a_file.txt").write_text("x", encoding="utf-8")
+    resp = client.get("/browse", params={"path": str(root)})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["path"] == str(root.resolve())
+    assert data["dirs"] == ["app", "zeta"]  # sorted; dot/$ dirs and files gone
+    assert data["parent"]  # a tmp dir always has one
+
+
+def test_browse_defaults_to_home(client: TestClient) -> None:
+    from pathlib import Path as P
+    resp = client.get("/browse")
+    assert resp.status_code == 200
+    assert resp.json()["path"] == str(P.home().resolve())
+
+
+def test_browse_rejects_files_and_missing_paths(
+        client: TestClient, tmp_path: Path) -> None:
+    missing = tmp_path / "nope"
+    assert client.get("/browse", params={"path": str(missing)}).status_code == 400
+    a_file = tmp_path / "f.txt"
+    a_file.write_text("x", encoding="utf-8")
+    assert client.get("/browse", params={"path": str(a_file)}).status_code == 400
+
+
+def test_browse_drive_root_has_empty_parent(client: TestClient) -> None:
+    import tempfile
+
+    root = Path(tempfile.gettempdir()).anchor
+    resp = client.get("/browse", params={"path": root})
+    assert resp.status_code == 200
+    assert resp.json()["parent"] == ""  # can't go above a drive root
+
+
+def test_scan_page_has_folder_picker(client: TestClient) -> None:
+    resp = client.get("/scan")
+    assert resp.status_code == 200
+    assert 'id="browse-dirs-btn"' in resp.text
+    assert 'id="dir-browser"' in resp.text and "<dialog" in resp.text
+    assert "/static/dirbrowse.js" in resp.text

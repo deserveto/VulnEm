@@ -342,6 +342,35 @@ main {
   border: none; padding: 0; margin: 0 0 var(--sp-4);
 }
 .hint { font-size: 13px; margin: var(--sp-1) 0 0; color: var(--muted); }
+
+/* -- folder picker dialog (New scan, white-box source) ----------------------- */
+dialog.dir-browser {
+  border: 1px solid var(--line-input); border-radius: 0;
+  padding: var(--sp-4); background: var(--surface); color: var(--ink);
+  width: min(560px, 92vw); max-height: 72vh;
+}
+dialog.dir-browser::backdrop { background: rgba(0, 0, 0, 0.35); }
+.dir-browser-path {
+  font-family: var(--mono); font-size: 13px; word-break: break-all;
+  margin: 0 0 var(--sp-2);
+}
+.dir-browser-nav { display: flex; gap: var(--sp-2); margin: 0 0 var(--sp-2); }
+.dir-browser-list {
+  display: flex; flex-direction: column;
+  max-height: 44vh; overflow-y: auto;
+  border-top: 1px solid var(--line-input);
+}
+.dir-browser-entry {
+  display: block; text-align: left; cursor: pointer;
+  padding: var(--sp-2) var(--sp-1);
+  background: transparent; color: var(--ink);
+  border: none; border-bottom: 1px solid var(--line-faint); border-radius: 0;
+  font-family: var(--mono); font-size: 13px;
+}
+.dir-browser-entry:hover { background: var(--line-faint); }
+@media (prefers-reduced-motion: reduce) {
+  dialog.dir-browser, .dir-browser-entry { transition: none; }
+}
 .warn { color: var(--warn); }
 
 .preset-row { display: flex; flex-direction: column; gap: 0;

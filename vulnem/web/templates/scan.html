@@ -68,6 +68,9 @@
       <label for="source_dir">Source directory (white-box)</label>
       <input type="text" id="source_dir" name="source_dir" value="{{ values.source_dir }}"
              placeholder="/path/to/target/source" autocomplete="off">
+      <button type="button" class="btn" id="browse-dirs-btn">Choose folder…</button>
+      <p class="dim hint">The target app's source tree on this machine —
+        agents analyze it from inside the sandbox.</p>
     </div>
     <div class="field checkbox">
       <label><input type="checkbox" name="solo" {% if values.solo %}checked{% endif %}>
@@ -85,7 +88,19 @@
     <button type="submit" class="btn primary">Start scan</button>
   </div>
 </form>
+
+<dialog id="dir-browser" class="dir-browser">
+  <h2>Choose source folder</h2>
+  <p class="dim dir-browser-path" id="dir-browser-path"></p>
+  <div class="form-actions dir-browser-nav">
+    <button type="button" class="btn" id="dir-browser-up">↑ Up</button>
+    <button type="button" class="btn primary" id="dir-browser-select">Use this folder</button>
+    <button type="button" class="btn" id="dir-browser-cancel">Cancel</button>
+  </div>
+  <div class="dir-browser-list" id="dir-browser-list"></div>
+</dialog>
 {% endblock %}
 {% block scripts %}
 <script src="/static/llmtest.js"></script>
+<script src="/static/dirbrowse.js"></script>
 {% endblock %}

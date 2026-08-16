@@ -283,6 +283,29 @@ def create_app(settings: Settings, jobs_manager: jobs.JobManager | None = None):
                                            "examples", ()) or ()),
         })
 
+    @app.get("/browse")
+    def browse_dirs(path: str = ""):
+        """Read-only directory listing for the scan form's folder picker.
+
+        Browsers never expose absolute local paths, so the picker is served by
+        this 127.0.0.1-bound app instead. Directory NAMES only — nothing a
+        ``ls`` at the keyboard wouldn't show — and no file contents ever.
+        """
+        base = Path(path).expanduser().resolve() if path else Path.home()
+        if not base.is_dir():
+            return JSONResponse({"error": "not a directory"}, status_code=400)
+        try:
+            dirs = sorted(
+                child.name for child in base.iterdir()
+                if child.is_dir()
+                and not child.name.startswith((".", "$"))  # noise: dotfiles, $Recycle
+            )
+        except OSError:  # unreadable system dirs list as empty, not as an error
+            dirs = []
+        parent = base.parent if base.parent != base else None  # None at drive root
+        return {"path": str(base), "parent": str(parent) if parent else "",
+                "dirs": dirs}
+
     def _render_authorize(request: Request, form: scans.ScanForm, error: str = ""):
         values = _form_values({
             "target": form.target, "network": form.network, "model": form.model,
