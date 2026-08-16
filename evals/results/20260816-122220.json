@@ -1,0 +1,280 @@
+[
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 0,
+    "ground_truth": 8,
+    "recall": 0.0,
+    "fp_rate": 0.0,
+    "matched": [],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-idor-users",
+      "js-jwt-flaws",
+      "js-sqli-login",
+      "js-sqli-search",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [],
+    "tokens": 4146318,
+    "turns": 185,
+    "wall_seconds": 1059,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-191526-juice-shop-b0d7"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 2,
+    "ground_truth": 8,
+    "recall": 0.25,
+    "fp_rate": 0.0,
+    "matched": [
+      "js-idor-users",
+      "js-whoami-leak"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-jwt-flaws",
+      "js-sqli-login",
+      "js-sqli-search",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [],
+    "tokens": 4209310,
+    "turns": 163,
+    "wall_seconds": 686,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-193335-juice-shop-a079"
+  },
+  {
+    "gt": "dvwa",
+    "target": "http://dvwa",
+    "findings": 3,
+    "ground_truth": 7,
+    "recall": 0.429,
+    "fp_rate": 0.0,
+    "matched": [
+      "dvwa-cmd-injection",
+      "dvwa-sqli",
+      "dvwa-xss-reflected"
+    ],
+    "missed": [
+      "dvwa-csrf",
+      "dvwa-file-inclusion",
+      "dvwa-file-upload",
+      "dvwa-xss-stored"
+    ],
+    "false_positives": [],
+    "tokens": 3945399,
+    "turns": 220,
+    "wall_seconds": 940,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-193336-dvwa-6251"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 4,
+    "ground_truth": 8,
+    "recall": 0.125,
+    "fp_rate": 0.75,
+    "matched": [
+      "js-sqli-search"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-idor-users",
+      "js-jwt-flaws",
+      "js-sqli-login",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [
+      "VULN-001",
+      "VULN-003",
+      "VULN-004"
+    ],
+    "tokens": 4498828,
+    "turns": 173,
+    "wall_seconds": 435,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-195155-juice-shop-69ce"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 5,
+    "ground_truth": 8,
+    "recall": 0.375,
+    "fp_rate": 0.4,
+    "matched": [
+      "js-sqli-login",
+      "js-sqli-search",
+      "js-xss-dom-search"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-idor-users",
+      "js-jwt-flaws",
+      "js-whoami-leak"
+    ],
+    "false_positives": [
+      "VULN-002",
+      "VULN-005"
+    ],
+    "tokens": 3107740,
+    "turns": 114,
+    "wall_seconds": 582,
+    "model": "openai/poolside/laguna-s-2.1",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-195935-juice-shop-ea92"
+  },
+  {
+    "gt": "vuln-app",
+    "target": "http://vuln-app:5000",
+    "findings": 9,
+    "ground_truth": 6,
+    "recall": 1.0,
+    "fp_rate": 0.333,
+    "matched": [
+      "vulnapp-cmdinj-ping",
+      "vulnapp-hardcoded-creds",
+      "vulnapp-secrets-status",
+      "vulnapp-sqli-search",
+      "vulnapp-traversal-note",
+      "vulnapp-xss-search"
+    ],
+    "missed": [],
+    "false_positives": [
+      "VULN-004",
+      "VULN-008",
+      "VULN-009"
+    ],
+    "tokens": 672358,
+    "turns": 61,
+    "wall_seconds": 253,
+    "model": "openai/auto",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-205914-vuln-app-e129"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 4,
+    "ground_truth": 8,
+    "recall": 0.25,
+    "fp_rate": 0.5,
+    "matched": [
+      "js-header-misconfig",
+      "js-jwt-flaws"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-idor-users",
+      "js-sqli-login",
+      "js-sqli-search",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [
+      "VULN-001",
+      "VULN-003"
+    ],
+    "tokens": 4120819,
+    "turns": 133,
+    "wall_seconds": 413,
+    "model": "openai/auto",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-210529-juice-shop-9e7b"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 2,
+    "ground_truth": 8,
+    "recall": 0.25,
+    "fp_rate": 0.0,
+    "matched": [
+      "js-sqli-login",
+      "js-sqli-search"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-header-misconfig",
+      "js-idor-users",
+      "js-jwt-flaws",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [],
+    "tokens": 4899741,
+    "turns": 193,
+    "wall_seconds": 1871,
+    "model": "openai/DeepSeek-V4-Pro",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-211626-juice-shop-8a32"
+  },
+  {
+    "gt": "dvwa",
+    "target": "http://dvwa",
+    "findings": 1,
+    "ground_truth": 7,
+    "recall": 0.143,
+    "fp_rate": 0.0,
+    "matched": [
+      "dvwa-sqli"
+    ],
+    "missed": [
+      "dvwa-cmd-injection",
+      "dvwa-csrf",
+      "dvwa-file-inclusion",
+      "dvwa-file-upload",
+      "dvwa-xss-reflected",
+      "dvwa-xss-stored"
+    ],
+    "false_positives": [],
+    "tokens": 3896366,
+    "turns": 264,
+    "wall_seconds": 909,
+    "model": "openai/DeepSeek-V4-Pro",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260815-214757-dvwa-c52f"
+  },
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 13,
+    "ground_truth": 8,
+    "recall": 0.5,
+    "fp_rate": 0.692,
+    "matched": [
+      "js-header-misconfig",
+      "js-jwt-flaws",
+      "js-sqli-login",
+      "js-sqli-search"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-idor-users",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [
+      "VULN-002",
+      "VULN-004",
+      "VULN-005",
+      "VULN-007",
+      "VULN-008",
+      "VULN-009",
+      "VULN-011",
+      "VULN-012",
+      "VULN-013"
+    ],
+    "tokens": 8173286,
+    "turns": 203,
+    "wall_seconds": 870,
+    "model": "openai/auto",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260816-050712-juice-shop-344a"
+  }
+]

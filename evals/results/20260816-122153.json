@@ -1,0 +1,38 @@
+[
+  {
+    "gt": "juice-shop",
+    "target": "http://juice-shop:3000",
+    "findings": 13,
+    "ground_truth": 8,
+    "recall": 0.5,
+    "fp_rate": 0.692,
+    "matched": [
+      "js-header-misconfig",
+      "js-jwt-flaws",
+      "js-sqli-login",
+      "js-sqli-search"
+    ],
+    "missed": [
+      "js-admin-config-exposure",
+      "js-idor-users",
+      "js-whoami-leak",
+      "js-xss-dom-search"
+    ],
+    "false_positives": [
+      "VULN-002",
+      "VULN-004",
+      "VULN-005",
+      "VULN-007",
+      "VULN-008",
+      "VULN-009",
+      "VULN-011",
+      "VULN-012",
+      "VULN-013"
+    ],
+    "tokens": 8173286,
+    "turns": 203,
+    "wall_seconds": 870,
+    "model": "openai/auto",
+    "run_dir": "C:\\Users\\sangh\\OneDrive\\Documents\\Project\\VulnEm\\runs\\20260816-050712-juice-shop-344a"
+  }
+]

@@ -170,7 +170,12 @@ all authenticated + proxied + `--budget`-bound; full tables in
   hit 30-40-turn caps without filing, root finished while injection was
   still live (force-stopped, nothing filed), and the JWT specialist filed
   3 NEGATIVE results as findings → prompt fix committed (negative results
-  are not findings); needs a flash re-run to confirm.
+  are not findings).
+- `runs/20260816-050712-juice-shop-344a` (flash, 200 turns, child caps 55):
+  **prompt fix confirmed** — 50% recall / no negative-results-as-findings;
+  13 findings, all claims of real issues (the 69% matcher FP rate is mostly
+  below-GT-granularity observations: missing Referrer-Policy/HSTS, JWT
+  payload data, /api/Challenges exposure — compact-GT cost, not noise).
 - `runs/20260815-211626-juice-shop-8a32` (pro, 200 turns): 25% recall /
   **0% FP** — both SQLis (login auth-bypass + search) properly validated;
   but sequential recon ate 90 turns and the budget capped coverage at 193
