@@ -46,6 +46,8 @@ def _styles() -> dict[str, ParagraphStyle]:
         "h3": ParagraphStyle("VH3", parent=base["Heading3"], spaceBefore=10,
                              spaceAfter=4),
         "body": ParagraphStyle("VBody", parent=base["Normal"], leading=13),
+        "list_item": ParagraphStyle("VListItem", parent=base["Normal"],
+                                    leading=12, leftIndent=14, spaceBefore=1),
         "code": ParagraphStyle("VCode", fontName=mono, fontSize=7.5, leading=9.5),
         "sev": {sev: ParagraphStyle(
             f"VSev{sev}", parent=base["Heading3"], textColor=hex_color,
@@ -91,8 +93,12 @@ def report_to_pdf(report: FindingsReport, out_path: Path) -> Path:
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#bdc3c7")),
         ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f8f9f9")]),
     ]))
-    story += [table, Spacer(1, 12), Paragraph("Summary", styles["h2"]),
-              Paragraph(_escape(report.summary), styles["body"])]
+    story += [table, Spacer(1, 12), Paragraph("Summary", styles["h2"])]
+    # the agent summary is markdown — render headings/bullets/tables as real
+    # flowables instead of one escaped text blob
+    from vulnem.report.mdrender import markdown_flowables
+
+    story += markdown_flowables(report.summary, styles)
 
     ordered = sorted(report.findings, key=lambda f: f.sort_key())
     for i, f in enumerate(ordered, start=1):

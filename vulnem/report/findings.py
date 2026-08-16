@@ -72,6 +72,8 @@ class FindingsReport(BaseModel):
         return json_path, md_path
 
     def to_markdown(self) -> str:
+        from vulnem.report.mdrender import normalize_summary_md
+
         counts = self.counts()
         total = len(self.findings)
         lines = [
@@ -89,7 +91,11 @@ class FindingsReport(BaseModel):
         ]
         for sev in SEVERITIES:
             lines.append(f"| {sev.title()} | {counts.get(sev, 0)} |")
-        lines += ["", f"**Total findings: {total}**", "", "## Summary", "", self.summary, ""]
+        lines += ["", f"**Total findings: {total}**", "", "## Summary", "",
+                  # the agent summary is free-form markdown; demote its
+                  # headings so it nests under this section instead of
+                  # hijacking the document hierarchy
+                  normalize_summary_md(self.summary), ""]
 
         ordered = sorted(self.findings, key=lambda f: f.sort_key())
         for i, f in enumerate(ordered, start=1):

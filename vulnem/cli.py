@@ -196,18 +196,20 @@ def cmd_report(args: argparse.Namespace) -> int:
         console.print(f"[red]No findings.json in {run_dir}[/red] "
                       "(expected a completed runs/<id> directory)")
         return 2
+    from vulnem.report.findings import findings_from_json
+
     try:
-        _export_machine_reports(run_dir)
+        report = findings_from_json(run_dir / "findings.json")
+        report.write(run_dir)  # report.md (fresh summary rendering)
+        _export_machine_reports(run_dir, report)
     except Exception as exc:
         console.print(f"[red]Report export failed:[/red] {exc}")
         return 2
-    from vulnem.report.findings import findings_from_json
-
-    report = findings_from_json(run_dir / "findings.json")
     counts = report.counts()
     parts = [f"{sev}: {n}" for sev, n in counts.items() if n]
     console.print(f"Re-exported for [bold]{report.target}[/bold] — findings: "
                   + (", ".join(parts) if parts else "none"))
+    console.print(f"  {run_dir / 'report.md'}")
     console.print(f"  {run_dir / 'findings.sarif'}")
     console.print(f"  {run_dir / 'report.pdf'}")
     return 0
