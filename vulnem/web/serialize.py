@@ -50,6 +50,7 @@ def run_summary(run_dir: Path) -> dict | None:
         "started_at": str(config.get("started_at", "")),
         "status": ("done" if findings_path.is_file()
                    else "running" if transcript_path.is_file() else "incomplete"),
+        "merged": bool(config.get("merged")),
         "findings": counts,
     }
 

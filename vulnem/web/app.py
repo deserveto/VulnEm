@@ -141,6 +141,12 @@ def create_app(settings: Settings, jobs_manager: jobs.JobManager | None = None):
     def run_page(run_id: str, request: Request):
         run_dir = _resolve_run(settings, run_id)
         if run_dir is None or not (run_dir / "transcript.jsonl").is_file():
+            # Merged-report dirs have findings but no transcript to replay —
+            # send them to the report page instead of a dead end.
+            if (run_dir is not None and (run_dir / "findings.json").is_file()):
+                from starlette.responses import RedirectResponse
+
+                return RedirectResponse(f"/runs/{run_id}/report", status_code=307)
             raise HTTPException(status_code=404, detail="run not found")
         state = RunState.from_transcript(run_dir / "transcript.jsonl")
         bootstrap = serialize.state_snapshot(state)

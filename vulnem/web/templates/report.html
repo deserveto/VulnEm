@@ -32,6 +32,7 @@
       {% endif %}
       {% if f.file %}<div><dt>File</dt><dd>{{ f.file }}{% if f.line %}:{{ f.line }}{% endif %}</dd></div>{% endif %}
       {% if f.reported_by %}<div><dt>By</dt><dd>{{ f.reported_by }}</dd></div>{% endif %}
+      {% if f.runs %}<div><dt>Runs</dt><dd>{{ f.runs | join(", ") }}</dd></div>{% endif %}
       <div><dt>Confidence</dt><dd>{{ f.confidence }}</dd></div>
     </dl>
     <h4>Description</h4>

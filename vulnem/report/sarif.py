@@ -72,6 +72,7 @@ def report_to_sarif(report: FindingsReport) -> dict:
                 "severity": f.severity,
                 "confidence": f.confidence,
                 "reported_by": f.reported_by,
+                **({"runs": f.runs} if f.runs else {}),
                 **({"cvss": f.cvss_vector} if f.cvss_vector else {}),
                 **({"cvss_score": f.cvss_score} if f.cvss_score is not None else {}),
                 **({"poc": f.poc} if f.poc else {}),

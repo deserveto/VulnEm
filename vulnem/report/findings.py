@@ -39,6 +39,9 @@ class Finding(BaseModel):
                              description="Line in `file` where the flaw lives")
     fix_patch: str | None = Field(default=None,
                                   description="Unified diff fixing the finding")
+    runs: list[str] = Field(default_factory=list,
+                            description="Runs that reported this finding "
+                                        "(cross-run consolidation; empty for a live scan)")
 
     def sort_key(self) -> tuple[int, str]:
         return (SEVERITY_ORDER.get(self.severity, 99), self.title.lower())
@@ -112,6 +115,8 @@ class FindingsReport(BaseModel):
                 meta.append(f"- File: {f.file}" + (f":{f.line}" if f.line else ""))
             if f.reported_by:
                 meta.append(f"- Reported by: {f.reported_by}")
+            if f.runs:
+                meta.append(f"- Found in runs: {', '.join(f.runs)}")
             lines += [*meta, "", "### Description", "", f.description, ""]
             lines += ["### Proof of Concept", "", "```", f.poc.strip(), "```", ""]
             lines += ["### Evidence", "", "```", f.evidence.strip(), "```", ""]
@@ -153,9 +158,14 @@ def _merge_duplicate(base: Finding, dup: Finding) -> Finding:
     if SEVERITY_ORDER.get(dup.severity, 99) < SEVERITY_ORDER.get(base.severity, 99):
         base, dup = dup, base
     attribution = dup.reported_by or "another agent"
-    base.evidence = (
-        f"{base.evidence.rstrip()}\n\n--- also reported by {attribution} ---\n{dup.evidence.rstrip()}"
-    )
+    if dup.runs:
+        attribution += f" (run {', '.join(dup.runs)})"
+    # A run already credited on `base` re-reporting the same issue (merging a
+    # run with itself) must not stack its own evidence a second time.
+    if not (dup.runs and set(dup.runs) <= set(base.runs)):
+        base.evidence = (
+            f"{base.evidence.rstrip()}\n\n--- also reported by {attribution} ---\n{dup.evidence.rstrip()}"
+        )
     if not base.poc.strip() and dup.poc.strip():
         base.poc = dup.poc
     if CONFIDENCE_ORDER.get(dup.confidence, 0) > CONFIDENCE_ORDER.get(base.confidence, 0):
@@ -165,6 +175,7 @@ def _merge_duplicate(base: Finding, dup: Finding) -> Finding:
         base.cvss_vector = dup.cvss_vector or base.cvss_vector
     names = [n for n in (base.reported_by, dup.reported_by) if n]
     base.reported_by = ", ".join(dict.fromkeys(names))
+    base.runs = list(dict.fromkeys([*base.runs, *dup.runs]))
     return base
 
 

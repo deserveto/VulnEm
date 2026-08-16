@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import re
 import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from rich.console import Console
 from rich.panel import Panel
@@ -191,6 +193,12 @@ def _export_machine_reports(run_dir: Path, report: FindingsReport | None = None)
 
 
 def cmd_report(args: argparse.Namespace) -> int:
+    if args.merge:
+        return _run_merge(args)
+    if not args.run_dir:
+        console.print("[red]report needs a run directory[/red] "
+                      "(or several after --merge)")
+        return 2
     run_dir = Path(args.run_dir).resolve()
     if not (run_dir / "findings.json").is_file():
         console.print(f"[red]No findings.json in {run_dir}[/red] "
@@ -212,6 +220,70 @@ def cmd_report(args: argparse.Namespace) -> int:
     console.print(f"  {run_dir / 'report.md'}")
     console.print(f"  {run_dir / 'findings.sarif'}")
     console.print(f"  {run_dir / 'report.pdf'}")
+    return 0
+
+
+def _merged_dir_name(target: str) -> str:
+    host = (urlsplit(target).hostname if "://" in target else target) or "target"
+    safe = re.sub(r"[^A-Za-z0-9.-]+", "-", host).strip("-.")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return f"{stamp}-{safe or 'target'}-merged-{uuid.uuid4().hex[:4]}"
+
+
+def _run_merge(args: argparse.Namespace) -> int:
+    """Consolidate several completed runs of one target into a single report."""
+    from vulnem.report.findings import findings_from_json
+    from vulnem.report.merge import MergeError, merge_reports
+
+    settings = _resolve_paths(Settings.load(project_root=PROJECT_ROOT))
+    sources: list[tuple[str, FindingsReport]] = []
+    for raw in args.merge:
+        run_dir = Path(raw).resolve()
+        if not (run_dir / "findings.json").is_file():
+            console.print(f"[red]No findings.json in {run_dir}[/red] "
+                          "(expected completed runs/<id> directories)")
+            return 2
+        try:
+            sources.append((run_dir.name, findings_from_json(run_dir / "findings.json")))
+        except Exception as exc:
+            console.print(f"[red]Cannot read findings from {run_dir}:[/red] {exc}")
+            return 2
+    try:
+        report, stats = merge_reports(sources)
+    except MergeError as exc:
+        console.print(f"[red]Merge refused:[/red] {exc}")
+        return 2
+
+    out_dir = (Path(args.out).resolve() if args.out
+               else settings.runs_dir / _merged_dir_name(report.target))
+    config = {
+        "target": report.target,
+        "model": report.model,
+        "merged": True,
+        "sources": [run_id for run_id, _ in sources],
+        "started_at": utc_now_iso(),
+        "vulnem_version": __version__,
+    }
+    try:
+        report.write(out_dir)
+        _export_machine_reports(out_dir, report)
+        (out_dir / "config.json").write_text(json.dumps(config, indent=2),
+                                             encoding="utf-8")
+    except Exception as exc:
+        console.print(f"[red]Merged report export failed:[/red] {exc}")
+        return 2
+
+    counts = report.counts()
+    parts = [f"{sev}: {n}" for sev, n in counts.items() if n]
+    console.print(f"Merged [bold]{len(sources)} run(s)[/bold] of "
+                  f"[bold]{report.target}[/bold] — {stats['raw']} raw → "
+                  f"{stats['unique']} unique "
+                  f"({stats['duplicates']} duplicate(s) collapsed): "
+                  + (", ".join(parts) if parts else "none"))
+    for run_id, n in stats["per_run"].items():
+        console.print(f"  [dim]{run_id}: {n} finding(s)[/dim]")
+    for name in ("report.md", "findings.json", "findings.sarif", "report.pdf"):
+        console.print(f"  {out_dir / name}")
     return 0
 
 
@@ -703,7 +775,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_report = sub.add_parser(
         "report", help="Re-export SARIF + PDF for a completed run")
-    p_report.add_argument("run_dir", help="Run directory (e.g. runs/20260816-...-juice-shop-ab12)")
+    p_report.add_argument("run_dir", nargs="?",
+                          help="Run directory (e.g. runs/20260816-...-juice-shop-ab12)")
+    p_report.add_argument("--merge", nargs="+", metavar="RUN",
+                          help="Consolidate several completed runs of the same "
+                               "target into one report (closes the 'one run is "
+                               "a sample' gap; re-finds merge with per-run "
+                               "attribution)")
+    p_report.add_argument("--out", metavar="DIR",
+                          help="Output directory for --merge "
+                               "(default: runs/<ts>-<host>-merged-<id>)")
     p_report.set_defaults(func=cmd_report)
 
     p_tui = sub.add_parser("tui", help="Replay/watch a run: agent graph, tool stream, findings")

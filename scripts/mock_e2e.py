@@ -356,6 +356,32 @@ def _verify(run_dir: Path) -> list[str]:
     return problems
 
 
+def _verify_merge(run_dir: Path) -> list[str]:
+    """`vulnem report --merge` consolidates a run with itself idempotently."""
+    import tempfile
+
+    from vulnem.cli import main as cli_main
+
+    problems: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="vulnem-merge-") as tmp:
+        rc = cli_main(["report", "--merge", str(run_dir), str(run_dir), "--out", tmp])
+        if rc != 0:
+            problems.append(f"report --merge exited {rc} (want 0)")
+            return problems
+        merged = json.loads((Path(tmp) / "findings.json").read_text(encoding="utf-8"))
+        source = json.loads((run_dir / "findings.json").read_text(encoding="utf-8"))
+        if len(merged["findings"]) != len(source["findings"]):
+            problems.append(f"self-merge changed the finding set: "
+                            f"{len(merged['findings'])} != {len(source['findings'])}")
+        for name in ("report.md", "findings.sarif", "report.pdf", "config.json"):
+            if not (Path(tmp) / name).is_file():
+                problems.append(f"merged report missing {name}")
+        cfg = json.loads((Path(tmp) / "config.json").read_text(encoding="utf-8"))
+        if not cfg.get("merged"):
+            problems.append("merged config.json lacks merged:true")
+    return problems
+
+
 def main() -> int:
     from rich.console import Console
 
@@ -382,6 +408,7 @@ def main() -> int:
         console.print("[red]no run directory produced[/red]")
         return 2
     problems = _verify(run_dirs[-1])
+    problems += _verify_merge(run_dirs[-1])
     console.print(f"\n[bold]mock e2e verification[/bold] ({time.time() - started:.0f}s):")
     # The scripted run always files findings, so the scan must exit 1
     # (fail-on-findings) — the Phase 4 CI contract. 0 means findings were
@@ -394,6 +421,7 @@ def main() -> int:
     console.print("  [green]PASS[/green] all specialists completed + filed reports")
     console.print("  [green]PASS[/green] mid-work specialist salvaged when root finished early")
     console.print("  [green]PASS[/green] overlapping findings deduped with merged attribution")
+    console.print("  [green]PASS[/green] report --merge consolidates runs (self-merge idempotent)")
     console.print("  [green]PASS[/green] transcript carries per-agent attribution")
     console.print("  [green]PASS[/green] real Chromium driven via browser tools; screenshot artifact persisted")
     console.print("  [green]PASS[/green] proxy sidecar captured flows, enabled replay, snapshot saved")

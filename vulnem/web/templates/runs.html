@@ -17,11 +17,11 @@
   <tbody>
   {% for r in runs %}
     <tr>
-      <td><a class="run-id" href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+      <td><a class="run-id" href="{% if r.merged %}/runs/{{ r.id }}/report{% else %}/runs/{{ r.id }}{% endif %}">{{ r.id }}</a></td>
       <td class="mono">{{ r.target or "—" }}</td>
       <td class="dim">{{ r.model or "—" }}</td>
       <td class="dim mono">{{ r.started_at or "—" }}</td>
-      <td><span class="badge status-{{ r.status }}">{{ r.status }}</span></td>
+      <td>{% if r.merged %}<span class="chip total">merged</span> {% endif %}<span class="badge status-{{ r.status }}">{{ r.status }}</span></td>
       <td>
         {% if r.findings %}
           <span class="chips">

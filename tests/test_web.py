@@ -59,6 +59,48 @@ def test_runs_list_empty_state(tmp_path: Path) -> None:
     assert "No runs yet" in resp.text
 
 
+MERGED_ID = "20260816-130000-juice-shop-merged-99aa"
+
+
+def _seed_merged_run(runs_dir: Path) -> None:
+    """A consolidated-report dir: findings + config (merged), no transcript."""
+    merged = runs_dir / MERGED_ID
+    merged.mkdir()
+    findings = json.loads((FIXTURE_RUN / "findings.json").read_text(encoding="utf-8"))
+    for f in findings["findings"]:
+        f["runs"] = ["run-one", "run-two"]
+    (merged / "findings.json").write_text(json.dumps(findings), encoding="utf-8")
+    (merged / "config.json").write_text(json.dumps({
+        "target": findings["target"], "model": "m", "merged": True,
+        "sources": ["run-one", "run-two"],
+        "started_at": "2026-08-16T13:00:00+00:00",
+    }), encoding="utf-8")
+
+
+def test_runs_list_marks_merged_and_links_report(runs_dir: Path) -> None:
+    _seed_merged_run(runs_dir)
+    settings = Settings(runs_dir=runs_dir, skills_dir=runs_dir / "skills")
+    resp = TestClient(create_app(settings)).get("/")
+    assert resp.status_code == 200
+    assert "merged" in resp.text
+    # merged rows link straight to the report (no transcript to replay)
+    assert f'href="/runs/{MERGED_ID}/report"' in resp.text
+    assert f'href="/runs/{MERGED_ID}"' not in resp.text
+
+
+def test_run_page_redirects_merged_run_to_report(runs_dir: Path) -> None:
+    _seed_merged_run(runs_dir)
+    settings = Settings(runs_dir=runs_dir, skills_dir=runs_dir / "skills")
+    client = TestClient(create_app(settings))
+    resp = client.get(f"/runs/{MERGED_ID}", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == f"/runs/{MERGED_ID}/report"
+    # and the report page itself renders with per-finding run attribution
+    resp = client.get(f"/runs/{MERGED_ID}/report")
+    assert resp.status_code == 200
+    assert "run-one" in resp.text and "run-two" in resp.text
+
+
 # -- run page + SSE --------------------------------------------------------------
 
 

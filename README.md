@@ -39,7 +39,10 @@ Reports land in `runs/<timestamp>-<host>/` — `report.md` (human),
 `findings.json` (structured), `findings.sarif` (CI/code-scanning),
 `report.pdf` (export), `transcript.jsonl` (every turn, tool call, and
 result — the data source for the live UI). Watch any run with
-`vulnem tui runs/<id>`; re-export SARIF/PDF with `vulnem report runs/<id>`.
+`vulnem tui runs/<id>`; re-export SARIF/PDF with `vulnem report runs/<id>`;
+consolidate several runs of one target with `vulnem report --merge
+runs/<id1> runs/<id2> ...` (one run is a sample — re-finds merge with
+per-run attribution).
 
 ## Web UI
 
@@ -166,7 +169,11 @@ authorization confirmation (or `--yes` with `VULNEM_YES=1` for CI).
   `findings.json`, `findings.sarif` (SARIF 2.1.0 — validated against the
   OASIS schema, severity→level mapping, CWE rule ids, stable fingerprints
   for CI dedupe) and `report.pdf` (severity table + per-finding detail with
-  monospace PoC/evidence). `vulnem report <run_dir>` re-exports both.
+  monospace PoC/evidence). `vulnem report <run_dir>` re-exports both, and
+  `vulnem report --merge <run_dir>... [--out DIR]` consolidates several runs
+  of the same target into one report — same endpoint+class re-finds collapse
+  (highest severity/confidence/CVSS wins, evidence stacked per reporter,
+  never blended) and each finding lists every run that reported it.
 - **White-box mode** (`--source <dir>`) — the target's source is mounted
   read-only into the sandbox; the image carries semgrep plus a vendored
   ruleset (works on internet-less lab networks). Static hits are treated as
@@ -211,7 +218,8 @@ Useful flags: `vulnem scan --budget N` (scan-wide turn budget),
 `--diff-file <f>` (PR-sized scans), `--no-proxy` (drop the mitmproxy
 sidecar layer), `vulnem resume <run_dir> [--extend-turns N]` (continue an
 interrupted scan from its snapshot), `vulnem tui <run_dir> [--follow]`
-(live/replay UI), `vulnem report <run_dir>` (re-export SARIF + PDF).
+(live/replay UI), `vulnem report <run_dir>` (re-export SARIF + PDF),
+`vulnem report --merge <runs>...` (cross-run consolidation).
 
 ## Safety model
 
