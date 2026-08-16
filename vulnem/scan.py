@@ -40,6 +40,7 @@ from vulnem.agents.session import (
 from vulnem.config import Settings
 from vulnem.report.findings import Finding
 from vulnem.sandbox import Sandbox
+from vulnem.sandbox.network import connect_container
 from vulnem.scope import Scope
 
 logger = logging.getLogger(__name__)
@@ -145,15 +146,54 @@ async def run_scan(
     auth_storage: list[dict[str, str]] = []
     auth_origin = ""
     auth_bearer = False
+    proxy_effective = False
     if proxy is not None:
         proxy.bind(coordinator, run_dir)
         poll_task = asyncio.create_task(proxy.poll_loop(), name="proxy-poller")
+
+        # Live-target scans (no --network): the sidecar created an ephemeral
+        # user-defined network for container-name DNS — attach the (already
+        # running) sandbox to it, or $https_proxy can never resolve. Lab scans
+        # already share the configured network and skip this.
+        proxy_net = getattr(proxy, "network", None)
+        if (proxy_net and proxy_net != getattr(sandbox, "network", None)
+                and getattr(sandbox, "container_name", "")):
+            await asyncio.to_thread(connect_container, proxy_net,
+                                    sandbox.container_name)
+
         coordinator.emit({
             "type": "proxy_started",
             "sidecar": proxy.name,
-            "network": settings.docker_network or "default",
+            "network": proxy_net or "default",
             "scope_hosts": list(scope.allowed_hosts),
         })
+
+        # Provision the sidecar's CA into the sandbox trust store (HTTPS
+        # through mitmproxy fails TLS verification without it), then verify
+        # the whole proxy path end-to-end so the run record never claims a
+        # network scope layer that is silently broken.
+        ca_installed = False
+        ca_cert = await asyncio.to_thread(proxy.get_ca_cert)
+        installer = getattr(sandbox, "install_proxy_ca", None)
+        if ca_cert and installer is not None:
+            try:
+                ca_installed = await asyncio.to_thread(installer, ca_cert)
+            except Exception:  # fake sandboxes must not crash the scan
+                logger.exception("proxy CA install failed; continuing")
+        proxy_ok, proxy_reason = await asyncio.to_thread(proxy.healthcheck, sandbox)
+        if proxy_ok:
+            proxy_effective = True
+            coordinator.emit({
+                "type": "proxy_ready",
+                "network": proxy_net or "default",
+                "ca_installed": ca_installed,
+            })
+        else:
+            # Scan continues (prompt scope + browser host-check still hold)
+            # but the run record must not claim the network layer is active.
+            coordinator.emit({"type": "proxy_down", "reason": proxy_reason})
+            _warn_proxy_down(proxy_reason)
+        _set_proxy_effective(run_dir, proxy_effective)
     if creds is not None:
         from vulnem.auth import AuthSession, stage_session
 
@@ -351,6 +391,7 @@ async def run_scan(
         "turns_used": budget.turns_used,
         "total_tokens": budget.tokens_used,
         "findings": len(findings),
+        "proxy_effective": proxy_effective,
     })
 
     if not summary:
@@ -364,6 +405,35 @@ async def run_scan(
         total_tokens=budget.tokens_used,
         transcript_path=transcript,
         run_dir=run_dir,
+    )
+
+
+def _set_proxy_effective(run_dir: Path, value: bool) -> None:
+    """Keep run_dir/config.json honest about the network scope layer.
+
+    cli.py writes ``"proxy": true`` when the sidecar was *configured*; this
+    records whether it *works*, so a broken proxy path is visible in the run
+    record, not just in the transcript. Best effort — never raises.
+    """
+    path = run_dir / "config.json"
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+        config["proxy_effective"] = value
+        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    except (OSError, ValueError):
+        logger.exception("could not record proxy_effective in %s", path)
+
+
+def _warn_proxy_down(reason: str) -> None:
+    """Loud console warning: network-layer scope enforcement is broken."""
+    from rich.console import Console
+
+    Console(stderr=True).print(
+        "[bold red]NETWORK-LAYER SCOPE ENFORCEMENT IS DOWN[/bold red] — "
+        f"the proxy path is broken ({reason}).\n"
+        "[yellow]Traffic is NOT being captured or scope-filtered at the "
+        "network layer. The scan continues under prompt scope + browser "
+        "host-check only; proxy_effective=false recorded in config.json.[/yellow]"
     )
 
 

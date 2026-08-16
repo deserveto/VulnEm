@@ -19,12 +19,14 @@ import contextlib
 import io
 import json
 import logging
+import shlex
 import tarfile
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
+from vulnem.sandbox.network import ensure_scan_network, teardown_scan_network
 from vulnem.scope import Scope
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,11 @@ logger = logging.getLogger(__name__)
 SIDECAR_IMAGE = "mitmproxy/mitmproxy:latest"
 FLOW_DIR = "/tmp/vulnem-flows"
 POLL_INTERVAL_S = 3.0
+# The official image runs as user ``mitmproxy``; custom builds may run as root.
+CA_CERT_PATHS = (
+    "/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem",
+    "/root/.mitmproxy/mitmproxy-ca-cert.pem",
+)
 
 
 class ProxyError(RuntimeError):
@@ -45,6 +52,7 @@ class ProxyManager:
                  image: str = SIDECAR_IMAGE) -> None:
         self._scope = scope
         self._network = network
+        self._owns_network = False  # True when we created the ephemeral network
         self._image = image
         self._name = f"vulnem-proxy-{uuid.uuid4().hex[:8]}"
         self._container = None
@@ -61,6 +69,11 @@ class ProxyManager:
         return self._name
 
     @property
+    def network(self) -> str | None:
+        """The Docker network the sidecar is on (None = default bridge)."""
+        return self._network
+
+    @property
     def sandbox_proxy_url(self) -> str:
         """The proxy address as the sandbox reaches it (container-name DNS)."""
         return f"http://{self._name}:8080"
@@ -69,6 +82,14 @@ class ProxyManager:
         """Create + start the sidecar (sync; call from a worker thread)."""
         import docker
         from docker.errors import ImageNotFound
+
+        if self._network is None:
+            # Live-target scan: the default bridge has no container-name DNS,
+            # so the sandbox could never resolve the sidecar. Create an
+            # ephemeral user-defined bridge (NOT internal — the sandbox needs
+            # outbound internet to reach the live target).
+            self._network = ensure_scan_network(None)
+            self._owns_network = self._network is not None
 
         try:
             self._client = docker.from_env()
@@ -123,22 +144,97 @@ class ProxyManager:
         return False
 
     def stop(self) -> None:
-        """Remove the sidecar (best effort — never raises)."""
-        if self._container is None:
-            return
-        try:
-            self._container.remove(force=True, v=True)
-            logger.info("removed proxy sidecar %s", self._name)
-        except Exception:  # teardown must not fail the scan
-            logger.exception("failed to remove proxy sidecar %s", self._name)
-        finally:
-            self._container = None
+        """Remove the sidecar (best effort — never raises).
+
+        When we created the ephemeral scan network, it is torn down AFTER
+        the container (the callers remove the sandbox first), so it deletes
+        cleanly instead of dangling.
+        """
+        if self._container is not None:
+            try:
+                self._container.remove(force=True, v=True)
+                logger.info("removed proxy sidecar %s", self._name)
+            except Exception:  # teardown must not fail the scan
+                logger.exception("failed to remove proxy sidecar %s", self._name)
+            finally:
+                self._container = None
+        if self._owns_network:
+            teardown_scan_network(self._network)
+            self._owns_network = False
+            self._network = None
 
     async def start_async(self) -> None:
         await asyncio.to_thread(self.start)
 
     async def stop_async(self) -> None:
         await asyncio.to_thread(self.stop)
+
+    # -- CA + health ---------------------------------------------------------
+
+    def get_ca_cert(self) -> bytes | None:
+        """Best-effort fetch of the mitmproxy CA cert from the sidecar.
+
+        Without it, HTTPS targets fail TLS verification through the proxy
+        (nothing provisions the sidecar's CA into the sandbox trust store
+        otherwise). Returns None on any failure — never raises.
+        """
+        if self._container is None:
+            return None
+        for path in CA_CERT_PATHS:
+            try:
+                stream, _stat = self._container.get_archive(path)
+                data = b"".join(c for c in stream if isinstance(c, bytes))
+                with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+                    for member in tar.getmembers():
+                        if not member.isfile():
+                            continue
+                        fh = tar.extractfile(member)
+                        if fh is not None:
+                            cert = fh.read()
+                            if cert:
+                                return cert
+            except Exception:
+                continue  # try the next known location
+        return None
+
+    def healthcheck(self, sandbox: Any) -> tuple[bool, str]:
+        """Verify the proxy path end-to-end from INSIDE the sandbox.
+
+        Runs one curl through ``$https_proxy`` to the scoped target; any
+        returned HTTP status means DNS + proxy + scope-guard all work.
+        Broken (curl error, empty output, or 000) returns False with a
+        short reason. Never raises — fake sandboxes replaying canned
+        responses count as success (something answered through the proxy).
+        """
+        try:
+            url = f"{self._scope.scheme}://{self._scope.host}"
+            if self._scope.port not in (80, 443):
+                url += f":{self._scope.port}"
+            probe = (
+                "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "
+                f"-x \"$https_proxy\" {shlex.quote(url + '/')}"
+            )
+            try:
+                res = sandbox.exec(probe, timeout=20)
+            except TypeError:  # minimal fakes without the timeout kwarg
+                res = sandbox.exec(probe)
+        except Exception as exc:
+            return False, f"healthcheck exec failed: {exc}"
+        out = (getattr(res, "stdout", "") or "").strip()
+        err = (getattr(res, "stderr", "") or "").strip()
+        code = getattr(res, "exit_code", None)
+        if code != 0:
+            detail = err.splitlines()[-1][:120] if err else f"exit code {code}"
+            return False, f"curl via proxy failed: {detail}"
+        if not out:
+            return False, "curl via proxy returned no status"
+        if out == "000":
+            return False, "proxy unreachable (http_code 000)"
+        # Real curl prints exactly the 3-digit status with -w. Fake sandboxes
+        # replay full HTTP responses, so treat any other non-empty output as
+        # "something answered" — success — rather than guessing at formats.
+        status = out[:3]
+        return True, status if status.isdigit() else "answered"
 
     # -- log readers ---------------------------------------------------------
 

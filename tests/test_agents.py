@@ -371,7 +371,7 @@ async def test_graph_budget_force_stops_neverending_agents(tmp_path):
     })
     result = await run_scan(
         scope=scope, settings=make_settings(child_max_turns=3), sandbox=FakeSandbox(),
-        run_dir=tmp_path, completion_fn=llm, budget_turns=4,
+        run_dir=tmp_path, completion_fn=llm, budget_turns=10,
     )
     state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     runner = next(a for a in state["agents"] if a["name"] == "runner")
@@ -577,3 +577,184 @@ def test_terminal_statuses_are_final(tmp_path):
     c.set_status(rec, AgentStatus.RUNNING)  # ignored
     assert rec.status == AgentStatus.COMPLETED
     assert rec.status in TERMINAL_STATUSES
+
+
+# -- salvage of unfinished specialists ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_capped_specialist_gets_salvaged_completion_report(tmp_path):
+    scope = Scope.from_target("http://t:80")
+    llm = ScriptedLLM({
+        "root": [("", "create_agent", {"name": "mapper",
+                                       "objective": "map the API"}),
+                 ("", "wait_for_agents", {}),
+                 ("", "finish_scan", {"summary": "collected salvaged report"})],
+        # mapper works (prose + tool calls + a finding) but never calls
+        # agent_finish → hits its per-agent cap (child_max_turns=3)
+        "mapper": [
+            ("Mapped /api/products and /api/users; auth flow next.",
+             "exec_command", {"command": "curl -s http://t/api/products"}),
+            ("Auth is a JWT in a cookie; basket endpoint looks like IDOR.",
+             "report_finding", {
+                 "title": "IDOR lead in basket API", "severity": "medium",
+                 "cwe": "CWE-639", "url": "http://t/api/basket",
+                 "description": "d", "evidence": "e", "poc": "p", "remediation": "r"}),
+            ("Lead filed; /api/basket/merge is unvalidated too — next target.",
+             "exec_command", {"command": "curl -s http://t/api/basket"}),
+        ],
+    })
+    result = await run_scan(scope=scope, settings=make_settings(child_max_turns=3),
+                            sandbox=FakeSandbox(), run_dir=tmp_path, completion_fn=llm)
+    assert result.finished
+
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    mapper = next(a for a in state["agents"] if a["name"] == "mapper")
+    assert mapper["status"] == "failed"
+    assert mapper["stop_reason"] == "max_turns"
+    report = mapper["completion_report"]
+    assert report is not None and report["agent"] == "mapper"
+    assert report["status"] == "failed"
+    assert report["recommendations"] == ""
+    assert "AUTO-SALVAGED" in report["summary"]
+    assert "turn cap" in report["summary"]
+    assert "Turns used: 3/3" in report["summary"]
+    # the agent's last assistant text is the payload that must survive
+    assert "/api/basket/merge is unvalidated" in report["summary"]
+    assert [f["title"] for f in report["findings"]] == ["IDOR lead in basket API"]
+    assert set(report["findings"][0]) == {"id", "title", "severity", "url", "cwe"}
+
+    events = [json.loads(line) for line in
+              (tmp_path / "transcript.jsonl").read_text(encoding="utf-8").splitlines()]
+    to_root = [e for e in events if e["type"] == "agent_message" and e["to"] == "root"]
+    reports = [e for e in to_root if e["msg_type"] == "completion_report"]
+    assert len(reports) == 1 and reports[0]["from"] == "mapper"
+    assert "AUTO-SALVAGED" in reports[0]["preview"]
+    # the salvaged report replaces the generic failure alert — not both
+    assert not [e for e in to_root if e["msg_type"] == "alert"]
+    end = next(e for e in events if e["type"] == "agent_end"
+               and e["agent_ctx"]["name"] == "mapper")
+    assert end["salvaged"] is True
+
+
+@pytest.mark.asyncio
+async def test_budget_stopped_specialist_also_salvaged(tmp_path):
+    # Driven directly (not via run_scan) so the scan budget is exactly
+    # exhausted before the specialist starts: it gets its 2 wrap-up grace
+    # turns, is force-stopped with stop_reason scan_budget, and the salvage
+    # must still hand the parent a structured report (lifecycle stays STOPPED).
+    from vulnem.agents.session import AgentSession, run_agent
+
+    coordinator = Coordinator(run_dir=tmp_path, budget=Budget(max_turns=2))
+    coordinator.register(name="root", role="root", parent_id=None,
+                         objective="o", max_turns=10)
+    kid = coordinator.register(name="slowpoke", role="specialist", parent_id="a1",
+                               objective="probe", max_turns=50)
+    calls = {"n": 0}
+
+    def completion_fn(messages, tools):
+        calls["n"] += 1
+        return _response("found an unvalidated redirect on /login", "exec_command",
+                         {"command": "curl -s http://t/login"}, calls["n"])
+
+    session = AgentSession(
+        record=kid, coordinator=coordinator, scope=Scope.from_target("http://t:80"),
+        settings=make_settings(), sandbox=FakeSandbox(),
+        tool_names={"exec_command"}, finish_tool="agent_finish",
+        system_prompt="ROLE: SPECIALIST (slowpoke)", initial_task="probe",
+        completion_fn=completion_fn,
+    )
+    coordinator.budget.charge_turn()
+    coordinator.budget.charge_turn()  # scan budget exhausted before the agent runs
+    outcome = await run_agent(session)
+
+    assert outcome.stop_reason == "scan_budget" and not outcome.finished
+    assert kid.status == AgentStatus.STOPPED
+    report = kid.completion_report
+    assert report is not None and report["status"] == "failed"
+    assert "AUTO-SALVAGED" in report["summary"]
+    assert "scan-wide budget" in report["summary"]
+    assert "unvalidated redirect" in report["summary"]  # last assistant text kept
+    assert report["findings"] == []
+    msgs = coordinator.drain_mailbox(coordinator.agents["a1"])
+    assert [m.msg_type for m in msgs] == ["completion_report"]  # report, not an alert
+    assert msgs[0].priority == "high"
+    assert msgs[0].content.startswith("COMPLETION REPORT from specialist 'slowpoke'")
+    assert "AUTO-SALVAGED" in msgs[0].content
+    events = [json.loads(line) for line in
+              (tmp_path / "transcript.jsonl").read_text(encoding="utf-8").splitlines()]
+    end = next(e for e in events if e["type"] == "agent_end"
+               and e["agent_ctx"]["name"] == "slowpoke")
+    assert end["salvaged"] is True
+
+
+@pytest.mark.asyncio
+async def test_salvage_does_not_overwrite_deliberate_finish(tmp_path):
+    scope = Scope.from_target("http://t:80")
+    llm = ScriptedLLM({
+        "root": [("", "create_agent", {"name": "kid", "objective": "o"}),
+                 ("", "wait_for_agents", {}),
+                 ("", "finish_scan", {"summary": "s"})],
+        "kid": [("halfway there", "exec_command", {"command": "curl -s http://t"}),
+                ("", "agent_finish", {"status": "completed", "summary": "did the thing",
+                                      "recommendations": "retry with deeper auth"})],
+    })
+    result = await run_scan(scope=scope, settings=make_settings(), sandbox=FakeSandbox(),
+                            run_dir=tmp_path, completion_fn=llm)
+    assert result.finished
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    kid = next(a for a in state["agents"] if a["name"] == "kid")
+    assert kid["status"] == "completed"
+    assert kid["completion_report"]["summary"] == "did the thing"
+    assert kid["completion_report"]["recommendations"] == "retry with deeper auth"
+    assert "AUTO-SALVAGED" not in kid["completion_report"]["summary"]
+    events = [json.loads(line) for line in
+              (tmp_path / "transcript.jsonl").read_text(encoding="utf-8").splitlines()]
+    end = next(e for e in events if e["type"] == "agent_end"
+               and e["agent_ctx"]["name"] == "kid")
+    assert "salvaged" not in end
+
+
+@pytest.mark.asyncio
+async def test_root_force_stopped_gets_no_salvage(tmp_path):
+    scope = Scope.from_target("http://t:80")
+    llm = ScriptedLLM({"root": [("", "think", {"thoughts": "planning"})] * 20})
+    result = await run_scan(scope=scope, settings=make_settings(), sandbox=FakeSandbox(),
+                            run_dir=tmp_path, completion_fn=llm, budget_turns=1)
+    assert not result.finished and result.stop_reason == "scan_budget"
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    root = next(a for a in state["agents"] if a["name"] == "root")
+    assert root["status"] == "stopped"
+    assert root["completion_report"] is None  # no parent → nothing to salvage for
+    events = [json.loads(line) for line in
+              (tmp_path / "transcript.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert not [e for e in events if e["type"] == "agent_message"]
+    end = next(e for e in events if e["type"] == "agent_end")
+    assert "salvaged" not in end
+
+
+@pytest.mark.asyncio
+async def test_stalled_specialist_salvage_falls_back_to_outcome_summary(tmp_path):
+    scope = Scope.from_target("http://t:80")
+    llm = ScriptedLLM({
+        "root": [("", "create_agent", {"name": "daydreamer", "objective": "o"}),
+                 ("", "wait_for_agents", {}),
+                 ("", "finish_scan", {"summary": "s"})],
+        # text-only turns → stall; no assistant message ever reaches the session
+        "daydreamer": [("just thinking...", None, None)] * 10,
+    })
+    result = await run_scan(scope=scope, settings=make_settings(), sandbox=FakeSandbox(),
+                            run_dir=tmp_path, completion_fn=llm)
+    assert result.finished
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    kid = next(a for a in state["agents"] if a["name"] == "daydreamer")
+    assert kid["status"] == "failed"
+    report = kid["completion_report"]
+    assert report is not None and "AUTO-SALVAGED" in report["summary"]
+    # no assistant text was ever recorded → the outcome line stands in
+    assert "without calling any tool" in report["summary"]
+    assert report["findings"] == []
+    events = [json.loads(line) for line in
+              (tmp_path / "transcript.jsonl").read_text(encoding="utf-8").splitlines()]
+    to_root = [e for e in events if e["type"] == "agent_message" and e["to"] == "root"]
+    assert [e["msg_type"] for e in to_root] == ["completion_report"]

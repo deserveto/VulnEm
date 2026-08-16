@@ -17,7 +17,7 @@ from typing import Any
 
 from vulnem.agent.prompt import build_specialist_prompt
 from vulnem.agent.tools import FINISH_TOOL, SCHEMA_BY_NAME
-from vulnem.agents.coordinator import AgentStatus, Message
+from vulnem.agents.coordinator import AgentStatus, Budget, Message
 from vulnem.agents.session import (
     HANDS_ON_SESSION_TOOLS,
     AgentSession,
@@ -29,6 +29,30 @@ AGENT_FINISH_TOOL = "agent_finish"
 
 _VALID_REPORT_STATUSES = {"completed", "failed", "blocked"}
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+
+# Minimum scan-budget headroom a new specialist must be able to draw on to be
+# spawnable at all — viability floors, not tuning knobs.
+_MIN_VIABLE_SPAWN_TURNS = 5
+_MIN_VIABLE_SPAWN_TOKENS = 50_000
+
+
+def _remaining_scan_budget(budget: Budget) -> tuple[int | None, int | None]:
+    """(remaining turns, remaining tokens) on the shared scan budget.
+
+    ``None`` in a slot means that budget dimension is unlimited.
+    """
+    remaining_turns = (
+        None if budget.max_turns is None else budget.max_turns - budget.turns_used
+    )
+    remaining_tokens = (
+        None if budget.max_tokens is None else budget.max_tokens - budget.tokens_used
+    )
+    return remaining_turns, remaining_tokens
+
+
+def _dim(value: int | None) -> str:
+    """Render one budget number; unlimited dimensions read as 'unlimited'."""
+    return "unlimited" if value is None else str(value)
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -254,6 +278,32 @@ async def _tool_create_agent(sess: AgentSession, args: dict[str, Any]) -> str:
     max_turns = int(args.get("max_turns") or settings.child_max_turns)
     max_turns = max(3, min(max_turns, settings.max_turns * 2))
 
+    # Scan-budget gate: every agent's every turn charges the SHARED scan-wide
+    # budget, so a spawn the budget cannot fund just creates a doomed child
+    # that dies with stop_reason "scan_budget". Refuse and tell the model to
+    # wrap up instead; unlimited dimensions (None) skip their check entirely.
+    budget = coordinator.budget
+    remaining_turns, remaining_tokens = _remaining_scan_budget(budget)
+    if (
+        (remaining_turns is not None and remaining_turns < _MIN_VIABLE_SPAWN_TURNS)
+        or (remaining_tokens is not None and remaining_tokens < _MIN_VIABLE_SPAWN_TOKENS)
+    ):
+        return json.dumps({"ok": False, "error": (
+            f"cannot spawn a specialist: the scan budget cannot fund one "
+            f"(turns used {budget.turns_used}/{_dim(budget.max_turns)}, "
+            f"tokens used {budget.tokens_used}/{_dim(budget.max_tokens)}; "
+            f"remaining {_dim(remaining_turns)} turns and "
+            f"{_dim(remaining_tokens)} tokens, but a viable specialist needs at "
+            f"least {_MIN_VIABLE_SPAWN_TURNS} turns and "
+            f"{_MIN_VIABLE_SPAWN_TOKENS} tokens). Do not spawn. Wrap up instead: "
+            f"call your finish tool (finish_scan) with the final assessment; if "
+            f"agents are still live, wait_for_agents to collect their reports or "
+            f"stop_agent to end them, then finish_scan."
+        )})
+    requested_turns = max_turns
+    if remaining_turns is not None and max_turns > remaining_turns:
+        max_turns = max(3, remaining_turns)
+
     try:
         child = coordinator.register(
             name=name, role="specialist", parent_id=record.agent_id,
@@ -294,12 +344,21 @@ async def _tool_create_agent(sess: AgentSession, args: dict[str, Any]) -> str:
         "objective": objective[:300],
     })
     child.task = spawn_agent_task(child_session)
+    note = ("specialist started and running concurrently; use wait_for_agents "
+            "to collect its report (no polling needed)")
+    if max_turns < requested_turns:
+        note += (f"; max_turns clamped from {requested_turns} to {max_turns} to fit "
+                 f"the remaining scan budget")
     return json.dumps({
         "ok": True,
         "agent_id": child.agent_id,
         "name": child.name,
-        "note": "specialist started and running concurrently; use wait_for_agents "
-                "to collect its report (no polling needed)",
+        "max_turns": max_turns,
+        "scan_budget_remaining": {
+            "turns": remaining_turns,
+            "tokens": remaining_tokens,
+        },
+        "note": note,
     })
 
 

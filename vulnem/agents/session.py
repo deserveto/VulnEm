@@ -37,6 +37,17 @@ _MAX_TEXT_ONLY_TURNS = 3
 # budget is exhausted; then it is force-stopped.
 _WRAPUP_GRACE_TURNS = 2
 
+# Stop reasons where a specialist's unfinished work is still worth reporting:
+# it ran and produced narrative/findings but never reached its finish tool.
+# error/crashed are excluded — no salvageable narrative, own alerting.
+_SALVAGE_STOP_REASONS = {"max_turns", "scan_budget", "stalled", "stopped"}
+_SALVAGE_WHY = {
+    "max_turns": "hit its per-agent turn cap",
+    "scan_budget": "was force-stopped by the scan-wide budget",
+    "stalled": "stalled after repeated turns without a tool call",
+    "stopped": "was stopped",
+}
+
 # The Phase 1 hands-on toolset shared by solo agents and specialists
 # (browser_* + proxy_* joined in Phase 3 — all sync handlers).
 HANDS_ON_SESSION_TOOLS = sorted(HANDS_ON_TOOL_NAMES)
@@ -323,12 +334,73 @@ async def run_agent(session: AgentSession) -> AgentOutcome:
     return AgentOutcome(stop_reason=stop_reason, summary=summary, finished=finished)
 
 
+def _last_assistant_text(messages: list[dict[str, Any]]) -> str:
+    """The agent's latest non-empty assistant text — its best progress log."""
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    return ""
+
+
+def _salvage_completion_report(session: AgentSession, outcome: AgentOutcome) -> dict[str, Any]:
+    """Synthesize the completion report a capped/stopped specialist never filed.
+
+    Same shape agent_finish builds, marked as salvaged: the parent (and the
+    final report) keeps the agent's last stated progress, budget stats, and
+    already-filed findings instead of a bare one-line failure alert.
+    """
+    record = session.record
+    findings = [
+        {"id": f.id, "title": f.title, "severity": f.severity, "url": f.url or "",
+         "cwe": f.cwe or ""}
+        for f in record.findings()
+    ]
+    tool_calls = sum(len(m.get("tool_calls") or []) for m in session.messages)
+    progress = _last_assistant_text(session.messages)[:1500] or outcome.summary
+    why = _SALVAGE_WHY.get(outcome.stop_reason, f"ended ({outcome.stop_reason})")
+    summary = (
+        f"AUTO-SALVAGED: agent '{record.name}' {why} before calling "
+        f"{session.finish_tool}; the coordinator assembled this report from "
+        "the agent's session.\n"
+        f"Turns used: {record.turns_used}/{record.max_turns}; "
+        f"tokens: {record.total_tokens}; tool calls: {tool_calls}.\n"
+        f"Findings already filed ({len(findings)}):"
+        + ("".join(f"\n- [{f['severity']}] {f['title']}" for f in findings) or " none")
+        + f"\nLast stated progress:\n{progress}"
+    )
+    return {
+        "agent": record.name,
+        "status": "failed",
+        "summary": summary,
+        "findings": findings,
+        "recommendations": "",
+    }
+
+
+def _completion_report_body(report: dict[str, Any]) -> str:
+    """Render a completion report for delivery — same format as agent_finish."""
+    findings = report.get("findings") or []
+    return (
+        f"COMPLETION REPORT from specialist '{report['agent']}'\n"
+        f"Status: {report['status']}\n"
+        f"Summary: {report['summary']}\n"
+        f"Findings filed ({len(findings)}):\n"
+        + ("\n".join(f"- [{f['severity']}] {f['title']} {f['url']}" for f in findings)
+           or "- (none)")
+        + (f"\nRecommendations: {report['recommendations']}"
+           if report.get("recommendations") else "")
+    )
+
+
 async def finalize_agent(session: AgentSession, outcome: AgentOutcome) -> None:
     """Map an outcome onto the final registry status + notify the parent.
 
-    Order matters: everything (parent alert, final snapshot) happens BEFORE
-    set_status flips the record terminal — that is what wakes parked waiters,
-    and they must observe a fully persisted agent.
+    Order matters: everything (salvage, parent message, final snapshot) happens
+    BEFORE set_status flips the record terminal — that is what wakes parked
+    waiters, and they must observe a fully persisted agent.
     """
     record = session.record
     coordinator = session.coordinator
@@ -344,23 +416,43 @@ async def finalize_agent(session: AgentSession, outcome: AgentOutcome) -> None:
     else:  # stopped | scan_budget | interrupted
         status = AgentStatus.STOPPED
 
+    # A specialist that never reached its finish tool still leaves work behind:
+    # salvage a completion report so it reaches the parent instead of vanishing.
+    salvaged = (
+        record.parent_id is not None
+        and not outcome.finished
+        and record.completion_report is None
+        and outcome.stop_reason in _SALVAGE_STOP_REASONS
+    )
+    if salvaged:
+        record.completion_report = _salvage_completion_report(session, outcome)
+
     record.stop_reason = record.stop_reason or outcome.stop_reason
-    session.emit({
+    end_event = {
         "type": "agent_end",
         "stop_reason": outcome.stop_reason,
         "turns_used": record.turns_used,
         "total_tokens": record.total_tokens,
         "findings": len(record.findings()),
-    })
-    if status in {AgentStatus.FAILED, AgentStatus.CRASHED} and record.parent_id:
-        parent = coordinator.agents.get(record.parent_id)
-        if parent is not None:
-            await coordinator.deliver(
-                parent,
-                Message(from_name=record.name, msg_type="alert", priority="high",
-                        content=(f"Agent '{record.name}' ended {status.value} "
-                                 f"({outcome.stop_reason}): {outcome.summary}")),
-            )
+    }
+    if salvaged:
+        end_event["salvaged"] = True
+    session.emit(end_event)
+    parent = coordinator.agents.get(record.parent_id) if record.parent_id else None
+    if parent is not None and salvaged:
+        # The salvaged report supersedes the generic failure alert.
+        await coordinator.deliver(
+            parent,
+            Message(from_name=record.name, msg_type="completion_report",
+                    priority="high", content=_completion_report_body(record.completion_report)),
+        )
+    elif parent is not None and status in {AgentStatus.FAILED, AgentStatus.CRASHED}:
+        await coordinator.deliver(
+            parent,
+            Message(from_name=record.name, msg_type="alert", priority="high",
+                    content=(f"Agent '{record.name}' ended {status.value} "
+                             f"({outcome.stop_reason}): {outcome.summary}")),
+        )
     await coordinator.snapshot_async()
     coordinator.set_status(record, status, outcome.stop_reason)
 

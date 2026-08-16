@@ -1,8 +1,10 @@
-"""Proxy + auth tests: scope addon logic, flow-log readers, proxy tools, creds.
+"""Proxy + auth tests: scope addon logic, flow-log readers, proxy tools, creds,
+ephemeral scan networks, mitm CA provisioning, proxy healthcheck wiring.
 
 All offline: the mitmproxy addon's pure functions are imported directly, the
-ProxyManager reads from a fake container serving tar archives, and the proxy
-tools run against that manager with a fake sandbox for replays.
+ProxyManager reads from a fake container serving tar archives, the proxy
+tools run against that manager with a fake sandbox for replays, and the
+Docker SDK client is faked wherever networks/containers would be touched.
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import docker as docker_sdk
+
 from vulnem.agent.tools import ToolContext, dispatch_tool
 from vulnem.auth import (
     AuthResult,
@@ -31,13 +35,16 @@ from vulnem.auth import (
 from vulnem.config import Settings
 from vulnem.proxy import scope_guard
 from vulnem.proxy.manager import ProxyManager
+from vulnem.sandbox.docker import Sandbox
+from vulnem.sandbox.network import ensure_scan_network, teardown_scan_network
+from vulnem.scan import run_scan
 from vulnem.scope import Scope
 
 
 class _Res:
-    def __init__(self, stdout="", exit_code=0):
+    def __init__(self, stdout="", exit_code=0, stderr=""):
         self.stdout = stdout
-        self.stderr = ""
+        self.stderr = stderr
         self.exit_code = exit_code
         self.duration = 0.01
 
@@ -341,3 +348,437 @@ def test_api_login_via_fake_sandbox(tmp_path):
     # the secret payload was staged as a file, not inlined in the command
     assert "admin" not in sb.commands[0]
     assert sb.files["/tmp/.vulnem-login.json"]
+
+
+# -- ephemeral scan networks (docker SDK faked) ------------------------------------------
+
+
+class FakeNetwork:
+    def __init__(self, name):
+        self.name = name
+        self.removed = False
+        self.connected: list[str] = []
+
+    def remove(self):
+        self.removed = True
+
+    def connect(self, container):
+        self.connected.append(container)
+
+
+class FakeNetworksAPI:
+    def __init__(self):
+        self.created: list[dict] = []
+        self.by_name: dict[str, FakeNetwork] = {}
+
+    def create(self, name, driver=None, internal=None):
+        self.created.append({"name": name, "driver": driver, "internal": internal})
+        net = FakeNetwork(name)
+        self.by_name[name] = net
+        return net
+
+    def get(self, name):
+        return self.by_name[name]
+
+
+class FakeSidecarContainer:
+    """Everything ProxyManager.start() touches on the sidecar container."""
+
+    def __init__(self):
+        self.started = False
+        self.removed = False
+
+    def put_archive(self, path, data):
+        return True
+
+    def start(self):
+        self.started = True
+
+    def exec_run(self, cmd, **kwargs):  # _wait_listening probe succeeds
+        return types.SimpleNamespace(exit_code=0, output=(b"", b""))
+
+    def logs(self, tail=20):
+        return b""
+
+    def remove(self, **kwargs):
+        self.removed = True
+
+
+class FakeContainersAPI:
+    def __init__(self, sidecar: FakeSidecarContainer):
+        self.sidecar = sidecar
+        self.created: list[dict] = []
+
+    def create(self, image, **kwargs):
+        self.created.append(kwargs)
+        return self.sidecar
+
+
+class FakeDockerClient:
+    def __init__(self, sidecar=None):
+        self.networks = FakeNetworksAPI()
+        self.images = types.SimpleNamespace(
+            get=lambda image: None, pull=lambda image: None
+        )
+        self.sidecar = sidecar or FakeSidecarContainer()
+        self.containers = FakeContainersAPI(self.sidecar)
+
+
+def test_ensure_scan_network_creates_ephemeral_when_unconfigured(monkeypatch):
+    client = FakeDockerClient()
+    monkeypatch.setattr(docker_sdk, "from_env", lambda: client)
+    name = ensure_scan_network(None)
+    assert name and name.startswith("vulnem-net-")
+    assert len(name.rsplit("-", 1)[1]) == 8  # vulnem-net-<8hex>
+    (created,) = client.networks.created
+    assert created["name"] == name and created["driver"] == "bridge"
+    # CRITICAL: not internal — the sandbox must reach live targets on the internet
+    assert not created["internal"]
+
+
+def test_configured_network_passes_through_unchanged(monkeypatch):
+    client = FakeDockerClient()
+    monkeypatch.setattr(docker_sdk, "from_env", lambda: client)
+    assert ensure_scan_network("vulnem-lab_labnet") == "vulnem-lab_labnet"
+    assert client.networks.created == []  # nothing ephemeral for lab scans
+
+
+def test_teardown_scan_network_removes_and_swallows_errors(monkeypatch, caplog):
+    client = FakeDockerClient()
+    monkeypatch.setattr(docker_sdk, "from_env", lambda: client)
+    net = client.networks.create("vulnem-net-deadbeef", driver="bridge")
+    teardown_scan_network("vulnem-net-deadbeef")
+    assert net.removed
+    teardown_scan_network(None)  # no-op
+    teardown_scan_network("vulnem-net-missing")  # unknown network: never raises
+
+
+def test_manager_start_creates_ephemeral_network_and_teardown_removes(monkeypatch):
+    client = FakeDockerClient()
+    monkeypatch.setattr(docker_sdk, "from_env", lambda: client)
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    pm.start()
+    net = pm.network
+    assert net and net.startswith("vulnem-net-")
+    # the sidecar was attached to the ephemeral network, not the default bridge
+    (kwargs,) = client.containers.created
+    assert kwargs["network"] == net
+    assert client.sidecar.started
+    pm.stop()
+    assert client.sidecar.removed
+    assert client.networks.by_name[net].removed  # network outlived the container
+
+
+def test_manager_start_keeps_configured_network_and_never_removes_it(monkeypatch):
+    client = FakeDockerClient()
+    monkeypatch.setattr(docker_sdk, "from_env", lambda: client)
+    lab = client.networks.create("vulnem-lab_labnet", driver="bridge", internal=True)
+    pm = ProxyManager(scope=Scope.from_target("http://juice-shop:3000"),
+                      network="vulnem-lab_labnet")
+    pm.start()
+    assert pm.network == "vulnem-lab_labnet"
+    assert len(client.networks.created) == 1  # nothing ephemeral created
+    pm.stop()
+    assert not lab.removed  # the lab network belongs to the lab, not to us
+
+
+# -- mitm CA provisioning --------------------------------------------------------------
+
+
+class PathAwareContainer:
+    """FakeContainer variant keyed by full container path (CA locations)."""
+
+    def __init__(self, files: dict[str, str]):
+        self.files = files
+
+    def get_archive(self, path: str):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return iter([_tar_bytes(path.rsplit("/", 1)[-1], self.files[path])]), None
+
+
+def test_get_ca_cert_prefers_mitmproxy_user_home():
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    pm._container = PathAwareContainer(
+        {"/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem": "FAKE-CA"})
+    assert pm.get_ca_cert() == b"FAKE-CA"
+
+
+def test_get_ca_cert_falls_back_to_root_home():
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    pm._container = PathAwareContainer(
+        {"/root/.mitmproxy/mitmproxy-ca-cert.pem": "ROOT-CA"})
+    assert pm.get_ca_cert() == b"ROOT-CA"
+
+
+def test_get_ca_cert_returns_none_on_missing_or_no_container():
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    pm._container = PathAwareContainer({})
+    assert pm.get_ca_cert() is None
+    pm2 = ProxyManager(scope=Scope.from_target("https://example.com"))
+    assert pm2.get_ca_cert() is None  # never raises, even stopped
+
+
+class FakeExecContainer:
+    """Records exec_run calls and serves put_archive'd files back."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+        self.files: dict[str, bytes] = {}
+        self.next_exit_code = 0
+
+    def put_archive(self, path, data):
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            member = tar.getmembers()[0]
+            fh = tar.extractfile(member)
+            self.files[f"{path}/{member.name}"] = fh.read() if fh else b""
+        return True
+
+    def exec_run(self, cmd, user=None, environment=None, demux=False):
+        self.calls.append({"cmd": cmd, "user": user, "env": environment})
+        code, self.next_exit_code = self.next_exit_code, 0
+        return types.SimpleNamespace(exit_code=code, output=(b"", b""))
+
+
+def _fake_sandbox() -> Sandbox:
+    sb = Sandbox(image="img", user="pentester",
+                 proxy_url="http://vulnem-proxy-x:8080")
+    sb._container = FakeExecContainer()
+    return sb
+
+
+def test_install_proxy_ca_stages_cert_and_runs_one_root_exec():
+    sb = _fake_sandbox()
+    assert sb.install_proxy_ca(b"FAKE-CA") is True
+    c = sb._container
+    # the cert landed at /home/<user>/.vulnem/mitm-ca.pem via put_file
+    assert c.files["/home/pentester/.vulnem/mitm-ca.pem"] == b"FAKE-CA"
+    users = [call["user"] for call in c.calls]
+    assert users[0] == "pentester"  # mkdir as the sandbox user
+    root_calls = [call for call in c.calls if call["user"] == "0"]
+    assert len(root_calls) == 1  # exactly ONE privileged exec
+    script = root_calls[0]["cmd"][2]
+    assert "update-ca-certificates" in script
+    assert "/usr/local/share/ca-certificates/vulnem-mitm.crt" in script
+    # merged bundle = system CA file + mitm CA, under the sandbox user's home
+    assert "cat /etc/ssl/certs/ca-certificates.crt" in script
+    assert "/home/pentester/.vulnem/ca-bundle.crt" in script
+
+
+def test_exec_env_carries_proxy_and_ca_bundle_after_install():
+    sb = _fake_sandbox()
+    sb.exec("true")
+    assert "SSL_CERT_FILE" not in sb._container.calls[-1]["env"]  # not yet installed
+    assert sb.install_proxy_ca(b"FAKE-CA") is True
+    sb.exec("curl -s https://example.com")
+    env = sb._container.calls[-1]["env"]
+    assert env["https_proxy"] == "http://vulnem-proxy-x:8080"
+    for var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+                "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO"):
+        assert env[var] == "/home/pentester/.vulnem/ca-bundle.crt"
+
+
+def test_install_proxy_ca_failure_returns_false_without_side_effects():
+    sb = _fake_sandbox()
+    sb._container.next_exit_code = 1  # root exec fails
+    assert sb.install_proxy_ca(b"FAKE-CA") is False
+    sb.exec("true")  # must NOT claim a bundle exists
+    assert "SSL_CERT_FILE" not in sb._container.calls[-1]["env"]
+
+
+# -- proxy healthcheck ------------------------------------------------------------------
+
+
+class _CurlSandbox(FakeSandbox):
+    def __init__(self, status: str, exit_code: int = 0, stderr: str = ""):
+        super().__init__()
+        self._status = status
+        self._exit_code = exit_code
+        self._stderr = stderr
+
+    def exec(self, command: str, *, timeout: int = 120):
+        self.commands.append(command)
+        return _Res(stdout=self._status, exit_code=self._exit_code)
+
+
+def test_healthcheck_probes_target_through_proxy_env():
+    pm = ProxyManager(scope=Scope.from_target("http://juice-shop:3000"))
+    sb = _CurlSandbox("204")
+    ok, detail = pm.healthcheck(sb)
+    assert ok and detail == "204"
+    cmd = sb.commands[-1]
+    assert cmd.startswith("curl -sS -o /dev/null -w '%{http_code}'")
+    assert "-x \"$https_proxy\"" in cmd and "http://juice-shop:3000/" in cmd
+
+
+def test_healthcheck_https_target_uses_https_url():
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    sb = _CurlSandbox("200")
+    ok, _ = pm.healthcheck(sb)
+    assert ok and "https://example.com/" in sb.commands[-1]
+
+
+def test_healthcheck_detects_broken_proxy():
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    ok, reason = pm.healthcheck(_CurlSandbox("000"))
+    assert not ok and "000" in reason
+    ok, reason = pm.healthcheck(_CurlSandbox("", exit_code=7))
+    assert not ok and "curl via proxy failed" in reason
+    ok, reason = pm.healthcheck(_CurlSandbox(""))
+    assert not ok and "no status" in reason
+
+
+def test_healthcheck_treats_unparseable_fake_output_as_success():
+    # Fake sandboxes replay full HTTP responses, not bare status codes;
+    # "something answered through the proxy" must count as healthy.
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    ok, detail = pm.healthcheck(FakeSandbox())
+    assert ok and detail == "answered"
+
+
+def test_healthcheck_survives_sandboxes_without_timeout_kwarg():
+    class Minimal:
+        def exec(self, command):  # no timeout kwarg at all
+            return _Res(stdout="200")
+
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    ok, _ = pm.healthcheck(Minimal())
+    assert ok
+
+
+# -- run_scan wiring: proxy_ready / proxy_down honesty -----------------------------------
+
+
+class _Resp:
+    def __init__(self, idx, text, name, args):
+        if name is None:
+            message = types.SimpleNamespace(content=text, tool_calls=None)
+        else:
+            tc = types.SimpleNamespace(
+                id=f"call_{idx}",
+                function=types.SimpleNamespace(name=name, arguments=args),
+            )
+            message = types.SimpleNamespace(content=text, tool_calls=[tc])
+        usage = types.SimpleNamespace(prompt_tokens=10, completion_tokens=5)
+        self.choices = [types.SimpleNamespace(message=message)]
+        self.usage = usage
+
+
+class SoloLLM:
+    """Smallest scripted completion_fn: think once, then finish."""
+
+    def __init__(self):
+        self.queue = [("", "think", {"thoughts": "plan"}),
+                      ("Done.", "finish_scan", {"summary": "scan complete"})]
+        self._i = 0
+
+    def __call__(self, messages, tools):
+        text, name, args = self.queue.pop(0)
+        self._i += 1
+        return _Resp(self._i, text, name, json.dumps(args))
+
+
+class ScanSandbox(FakeSandbox):
+    """FakeSandbox + the surface run_scan's proxy wiring touches."""
+
+    network = None
+    container_name = "vulnem-sandbox-fake01"
+    proxy_url = "http://vulnem-proxy-fake:8080"
+
+    def __init__(self):
+        super().__init__()
+        self.ca: bytes | None = None
+
+    def install_proxy_ca(self, cert_bytes: bytes) -> bool:
+        self.ca = cert_bytes
+        return True
+
+
+class CurlFailSandbox(ScanSandbox):
+    def exec(self, command: str, *, timeout: int = 120):
+        self.commands.append(command)
+        return _Res(stdout="", exit_code=7,
+                    stderr="curl: (7) Could not resolve proxy vulnem-proxy-x")
+
+
+def _write_run_config(tmp_path: Path) -> None:
+    (tmp_path / "config.json").write_text(json.dumps({
+        "target": "https://example.com", "model": "fake/model",
+        "network": None, "proxy": True, "started_at": "t0",
+    }), encoding="utf-8")
+
+
+def _transcript_events(tmp_path: Path) -> list[dict]:
+    return [json.loads(line)
+            for line in (tmp_path / "transcript.jsonl").read_text(
+                encoding="utf-8").splitlines()]
+
+
+async def _run_with_proxy(tmp_path, sandbox, proxy) -> None:
+    await run_scan(scope=Scope.from_target("https://example.com"),
+                   settings=Settings(model="fake/model"), sandbox=sandbox,
+                   run_dir=tmp_path, solo=True, completion_fn=SoloLLM(),
+                   proxy=proxy)
+
+
+@pytest.mark.asyncio
+async def test_proxy_ready_event_and_honest_config_on_success(tmp_path):
+    _write_run_config(tmp_path)
+    sb = ScanSandbox()
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    pm._container = FakeContainer({"mitmproxy-ca-cert.pem": "FAKE-CA",
+                                   "flows.jsonl": "", "blocked.jsonl": ""})
+
+    await _run_with_proxy(tmp_path, sb, pm)
+
+    assert sb.ca == b"FAKE-CA"  # CA fetched from the sidecar and installed
+    events = _transcript_events(tmp_path)
+    kinds = [e["type"] for e in events]
+    assert "proxy_started" in kinds and "proxy_ready" in kinds
+    ready = next(e for e in events if e["type"] == "proxy_ready")
+    assert ready["ca_installed"] is True and ready["network"] == "default"
+    config = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert config["proxy_effective"] is True
+    end = next(e for e in events if e["type"] == "scan_end")
+    assert end["proxy_effective"] is True
+
+
+@pytest.mark.asyncio
+async def test_proxy_down_event_marks_config_and_scan_continues(tmp_path):
+    _write_run_config(tmp_path)
+    sb = CurlFailSandbox()
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    pm._container = FakeContainer({"mitmproxy-ca-cert.pem": "FAKE-CA",
+                                   "flows.jsonl": "", "blocked.jsonl": ""})
+
+    await _run_with_proxy(tmp_path, sb, pm)
+
+    events = _transcript_events(tmp_path)
+    kinds = [e["type"] for e in events]
+    assert "proxy_ready" not in kinds and "proxy_down" in kinds
+    down = next(e for e in events if e["type"] == "proxy_down")
+    assert "proxy" in down["reason"]
+    # the scan CONTINUED to a clean finish despite the broken network layer
+    assert "scan_end" in kinds
+    end = next(e for e in events if e["type"] == "scan_end")
+    assert end["proxy_effective"] is False
+    # the run record no longer silently claims the network layer is active
+    config = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert config["proxy"] is True and config["proxy_effective"] is False
+
+
+@pytest.mark.asyncio
+async def test_scan_survives_sandbox_without_ca_installer(tmp_path):
+    _write_run_config(tmp_path)
+    sb = FakeSandbox()  # no install_proxy_ca / container_name attributes at all
+    pm = ProxyManager(scope=Scope.from_target("https://example.com"))
+    pm._container = FakeContainer({"mitmproxy-ca-cert.pem": "FAKE-CA",
+                                   "flows.jsonl": "", "blocked.jsonl": ""})
+
+    await _run_with_proxy(tmp_path, sb, pm)
+
+    events = _transcript_events(tmp_path)
+    ready = next(e for e in events if e["type"] == "proxy_ready")
+    assert ready["ca_installed"] is False  # graceful degradation, not a crash
+    config = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert config["proxy_effective"] is True

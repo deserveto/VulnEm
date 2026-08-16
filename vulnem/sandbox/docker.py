@@ -44,6 +44,10 @@ class ExecResult:
 class Sandbox:
     """One disposable container per scan."""
 
+    # Where the mitmproxy CA + merged trust bundle live inside the sandbox.
+    CA_MEMBER = "mitm-ca.pem"
+    CA_BUNDLE = "ca-bundle.crt"
+
     def __init__(
         self,
         *,
@@ -62,11 +66,17 @@ class Sandbox:
         self._name = f"{name_prefix}-{uuid.uuid4().hex[:8]}"
         self._client: docker.DockerClient | None = None
         self._container = None
+        self._ca_installed = False
 
     @property
     def proxy_url(self) -> str | None:
         """The HTTP proxy every sandbox client is pointed at (or None)."""
         return self._proxy_url
+
+    @property
+    def network(self) -> str | None:
+        """Docker network the container was created on (None = default bridge)."""
+        return self._network
 
     @property
     def source_mount(self) -> str | None:
@@ -131,16 +141,23 @@ class Sandbox:
 
     # -- execution ---------------------------------------------------------
 
+    @property
+    def ca_bundle_path(self) -> str | None:
+        """Path of the merged CA bundle inside the sandbox (None if not installed)."""
+        return self._ca_bundle() if self._ca_installed else None
+
+    def _ca_dir(self) -> str:
+        return f"/home/{self._user}/.vulnem"
+
+    def _ca_bundle(self) -> str:
+        return f"{self._ca_dir()}/{self.CA_BUNDLE}"
+
     def exec(self, command: str, *, timeout: int = 120) -> ExecResult:
         """Run a shell command inside the sandbox.
 
         The command is wrapped in ``timeout`` so runaway processes are killed;
         the whole call is additionally bounded client-side.
         """
-        if self._container is None:
-            raise SandboxError("Sandbox is not running")
-        script = f"timeout -k 5 {max(1, int(timeout))} bash -c {shlex.quote(command)}"
-        started = time.monotonic()
         env = {"HOME": f"/home/{self._user}"}
         if self._proxy_url:
             # Route HTTP clients through the mitmproxy sidecar (scope-checked).
@@ -153,12 +170,34 @@ class Sandbox:
                 "no_proxy": "localhost,127.0.0.1",
                 "NO_PROXY": "localhost,127.0.0.1",
             })
-        result = self._container.exec_run(
-            ["/bin/bash", "-lc", script],
-            user=self._user,
-            environment=env,
-            demux=True,
-        )
+            if self._ca_installed:
+                # Point TLS stacks at the merged (system + mitmproxy) bundle so
+                # HTTPS through the sidecar verifies instead of failing.
+                bundle = self._ca_bundle()
+                env.update({
+                    "SSL_CERT_FILE": bundle,
+                    "REQUESTS_CA_BUNDLE": bundle,
+                    "CURL_CA_BUNDLE": bundle,
+                    "NODE_EXTRA_CA_CERTS": bundle,
+                    "GIT_SSL_CAINFO": bundle,
+                })
+        return self._run_script(command, user=self._user, env=env, timeout=timeout)
+
+    def _exec_as_root(self, command: str, *, timeout: int = 120) -> ExecResult:
+        """Run one privileged command (uid 0) — CA install needs write access
+        to the system trust store; every agent-driven exec stays non-root."""
+        return self._run_script(command, user="0", env=None, timeout=timeout)
+
+    def _run_script(self, command: str, *, user: str, env: dict | None,
+                    timeout: int) -> ExecResult:
+        if self._container is None:
+            raise SandboxError("Sandbox is not running")
+        script = f"timeout -k 5 {max(1, int(timeout))} bash -c {shlex.quote(command)}"
+        started = time.monotonic()
+        kwargs: dict = {"user": user, "demux": True}
+        if env is not None:
+            kwargs["environment"] = env
+        result = self._container.exec_run(["/bin/bash", "-lc", script], **kwargs)
         duration = time.monotonic() - started
         stdout = (result.output[0] or b"").decode("utf-8", errors="replace")
         stderr = (result.output[1] or b"").decode("utf-8", errors="replace")
@@ -197,6 +236,51 @@ class Sandbox:
                     if fh is not None:
                         return fh.read()
         raise SandboxError(f"{container_path} is not a regular file in the sandbox")
+
+    # -- proxy CA ------------------------------------------------------------
+
+    def install_proxy_ca(self, cert_bytes: bytes) -> bool:
+        """Trust the mitmproxy sidecar's CA inside the sandbox.
+
+        Stages the cert as the sandbox user (mkdir + put_file), then ONE
+        root exec installs it system-wide AND builds a merged bundle
+        (system CAs + mitm CA) readable by the sandbox user; subsequent
+        execs point TLS env vars (SSL_CERT_FILE, ...) at that bundle. Best
+        effort: returns False on failure, never raises.
+        """
+        try:
+            ca_dir = self._ca_dir()
+            ca_path = f"{ca_dir}/{self.CA_MEMBER}"
+            res = self.exec(f"mkdir -p {shlex.quote(ca_dir)}", timeout=15)
+            if res.exit_code != 0:
+                logger.error("could not create %s in sandbox: %s",
+                             ca_dir, res.stderr.strip()[:200])
+                return False
+            self.put_file(cert_bytes, ca_path)
+            crt = "/usr/local/share/ca-certificates/vulnem-mitm.crt"
+            bundle = self._ca_bundle()
+            script = (
+                "set -e;"
+                f" cp {shlex.quote(ca_path)} {shlex.quote(crt)}"
+                " && update-ca-certificates"
+                f" && cat /etc/ssl/certs/ca-certificates.crt {shlex.quote(ca_path)}"
+                f" > {shlex.quote(bundle)}"
+                f" && chown {shlex.quote(self._user)} {shlex.quote(ca_path)}"
+                f" {shlex.quote(bundle)} && chmod 644 {shlex.quote(ca_path)}"
+                f" {shlex.quote(bundle)}"
+            )
+            root = self._exec_as_root(script, timeout=120)
+            if root.exit_code != 0:
+                logger.error("CA install (root exec) failed in sandbox: %s",
+                             root.stderr.strip()[:200])
+                return False
+            self._ca_installed = True
+            logger.info("installed mitmproxy CA into sandbox trust store (bundle=%s)",
+                        bundle)
+            return True
+        except Exception:
+            logger.exception("install_proxy_ca failed")
+            return False
 
     # -- helpers -----------------------------------------------------------
 
