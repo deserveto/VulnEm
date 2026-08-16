@@ -72,6 +72,11 @@ RUN curl -sfL https://raw.githubusercontent.com/danielmiessler/SecLists/master/D
     curl -sfL https://raw.githubusercontent.com/danielmiessler/SecLists/master/Discovery/Web-Content/raft-medium-directories.txt \
       -o /usr/share/wordlists/raft-medium-directories.txt || true
 
+# Semgrep phones home to semgrep.dev for metrics even with vendored local
+# rules; the scope proxy blocks those CONNECTs (by design) and the retries
+# burn agent turns. Declared last so heavy cached layers above survive rebuilds.
+ENV SEMGREP_SEND_METRICS=off
+
 USER pentester
 WORKDIR /home/pentester/workspace
 
