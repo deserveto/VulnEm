@@ -39,6 +39,7 @@ def test_key_vars_match_litellm_conventions() -> None:
     assert providers.PROVIDERS["anthropic"].key_var == "ANTHROPIC_API_KEY"
     assert providers.PROVIDERS["openrouter"].key_var == "OPENROUTER_API_KEY"
     assert providers.PROVIDERS["groq"].key_var == "GROQ_API_KEY"
+    assert providers.PROVIDERS["zai"].key_var == "ZAI_API_KEY"
 
 
 def test_keyless_providers_are_the_local_ones() -> None:

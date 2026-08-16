@@ -56,6 +56,10 @@ PROVIDERS: dict[str, Provider] = {
                   "deepseek/deepseek-reasoner")),
         Provider("xai", "xAI (Grok)", "XAI_API_KEY",
                  ("xai/grok-4", "xai/grok-code-fast-1")),
+        Provider("zai", "Z.ai (GLM)", "ZAI_API_KEY",
+                 ("zai/glm-5.1", "zai/glm-5", "zai/glm-5-code"),
+                 "Coding-plan keys need ZAI_API_BASE=https://api.z.ai/api/"
+                 "coding/paas/v4 in .env; any current model name routes."),
         Provider("perplexity", "Perplexity", "PERPLEXITYAI_API_KEY",
                  ("perplexity/sonar-pro", "perplexity/sonar",
                   "perplexity/sonar-reasoning")),
