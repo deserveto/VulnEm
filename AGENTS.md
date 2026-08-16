@@ -37,6 +37,8 @@ Venv at `.venv` — always `.venv/Scripts/python` / `.venv/Scripts/vulnem`.
 .venv/Scripts/python scripts/mock_e2e.py        # keyless full-stack, ~45s
 .venv/Scripts/python scripts/mock_resume.py     # keyless interrupt+resume e2e
                                                 # (needs the vulnem-lab lab up)
+python scripts/bootstrap.py                      # fresh checkout: venv+install+
+                                                # doctor+web wizard (--no-ui to skip)
 docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
 ```
 

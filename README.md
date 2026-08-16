@@ -15,6 +15,19 @@ browser — onboarding, launching scans, and watching them live.
 
 ## Quickstart
 
+The fast path — one line, then everything else happens in the browser
+(Python 3.11+ and Docker required; Git Bash on Windows or any unix shell):
+
+```bash
+git clone https://github.com/deserveto/VulnEm.git && cd VulnEm && python scripts/bootstrap.py
+```
+
+That creates the venv, installs VulnEm, runs `vulnem doctor`, and opens the
+web Setup wizard — pick a provider, paste its API key (never echoed), Test
+connection, build the sandbox image, and run the safe demo from there.
+
+Manual setup (SSH / headless — no browser):
+
 ```bash
 # 1. Install (Python 3.11+, Docker required)
 cd VulnEm
