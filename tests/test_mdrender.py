@@ -11,7 +11,12 @@ pytest.importorskip("reportlab")
 from reportlab.platypus import Paragraph, Preformatted, Table
 
 from vulnem.report.findings import Finding, FindingsReport
-from vulnem.report.mdrender import markdown_flowables, md_inline, normalize_summary_md
+from vulnem.report.mdrender import (
+    markdown_flowables,
+    md_inline,
+    normalize_summary_md,
+    wrap_code,
+)
 from vulnem.report.pdf import _styles, report_to_pdf
 
 NASTY = """# Security Assessment Summary: http://x
@@ -58,16 +63,53 @@ def test_md_inline_markup() -> None:
         "<b>bold</b> <i>it</i> <font face=\"Courier\">code</font> &lt;tag&gt;")
 
 
+def test_md_inline_nested_code_and_italic_no_interleaving() -> None:
+    # mixing asterisks into code spans used to emit interleaved markup
+    # (<i><font>a *b</i></font>) that killed reportlab's parser for the
+    # whole report; now degenerate pairs render literally instead
+    assert md_inline("`a *b` c*") == '<font face="Courier">a *b</font> c*'
+    markup = md_inline("*lead `span*` tail")
+    assert markup.startswith("*lead <font") and "</i></font>" not in markup
+    for m in (markup, md_inline("*foo `bar*`")):
+        Paragraph(m, _styles()["body"]).wrap(490, 100)  # parses + lays out
+
+
 def test_markdown_flowables_structure() -> None:
     flows = markdown_flowables(NASTY, _styles())
     kinds = [type(f) for f in flows]
     assert Paragraph in kinds and Table in kinds and Preformatted in kinds
     table = next(f for f in flows if isinstance(f, Table))
-    assert table._cellvalues[0] == ["Wave", "Agent", "Findings"]
-    assert table._cellvalues[1] == ["Recon", "recon-mapping", "6"]
+    # cells are wrapping Paragraphs (raw strings overlap instead of wrapping)
+    header = [p.text for p in table._cellvalues[0]]
+    assert header == ["Wave", "Agent", "Findings"]
+    assert [p.text for p in table._cellvalues[1]] == ["Recon", "recon-mapping", "6"]
     # bullets render as paragraphs with bullet dots, bold kept as markup
     bullets = [f for f in flows if isinstance(f, Paragraph) and f.bulletText == "•"]
     assert len(bullets) >= 2
+
+
+def test_markdown_flowables_wrap_long_code_lines() -> None:
+    long_line = "eyJhbGciOiJIUzI1NiJ9." + "A" * 300 + ".signature-tail"
+    wrapped = wrap_code(long_line)
+    lines = wrapped.splitlines()
+    assert all(len(ln) <= 100 for ln in lines)
+    assert lines[0].startswith("eyJhbGciOiJIUzI1NiJ9.")
+    # round-trips to the same content (modulo continuation indents)
+    assert wrapped.replace("  ", "") .replace("\n", "") == long_line.replace("\n", "")
+    # and the flowable path uses it
+    flows = markdown_flowables(f"```\n{long_line}\n```", _styles())
+    assert any(isinstance(f, Preformatted) for f in flows)
+
+
+def test_markdown_flowables_wide_table_fits_frame() -> None:
+    rows = ["| " + " | ".join(f"column-{i}-with-long-header" for i in range(6)) + " |",
+            "| --- | --- | --- | --- | --- | --- |"]
+    for r in range(4):
+        rows.append("| " + " | ".join(f"cell-{r}-{i}-" + "x" * 25 for i in range(6)) + " |")
+    flows = markdown_flowables("\n".join(rows), _styles())
+    table = next(f for f in flows if isinstance(f, Table))
+    width, _ = table.wrap(490, 10000)
+    assert width <= 490.5  # frame + float epsilon — never back into the margin
 
 
 def test_report_md_summary_nests_under_section(tmp_path: Path) -> None:
@@ -83,7 +125,8 @@ def test_report_md_summary_nests_under_section(tmp_path: Path) -> None:
 
 
 def test_pdf_summary_renders_structured(tmp_path: Path) -> None:
-    finding = Finding(title="t", severity="high", description="d", evidence="e",
+    finding = Finding(title="t", severity="high",
+                      description="d", evidence="cookie=" + "J" * 300,
                       poc="p", remediation="r")
     report = FindingsReport(target="http://x", started_at="t0", finished_at="t1",
                             model="m", summary=NASTY, findings=[finding])

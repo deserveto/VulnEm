@@ -25,6 +25,7 @@ from reportlab.platypus import (
 )
 
 from vulnem.report.findings import SEVERITIES, FindingsReport
+from vulnem.report.mdrender import wrap_code
 
 SEVERITY_HEX = {
     "critical": colors.HexColor("#c0392b"),
@@ -46,6 +47,8 @@ def _styles() -> dict[str, ParagraphStyle]:
         "h3": ParagraphStyle("VH3", parent=base["Heading3"], spaceBefore=10,
                              spaceAfter=4),
         "body": ParagraphStyle("VBody", parent=base["Normal"], leading=13),
+        "cell": ParagraphStyle("VCell", parent=base["Normal"], fontSize=7.5,
+                               leading=9.5),
         "list_item": ParagraphStyle("VListItem", parent=base["Normal"],
                                     leading=12, leftIndent=14, spaceBefore=1),
         "code": ParagraphStyle("VCode", fontName=mono, fontSize=7.5, leading=9.5),
@@ -60,7 +63,7 @@ def _escape(text: str) -> str:
 
 
 def _code_block(text: str, style) -> Preformatted:
-    return Preformatted(text.strip() or "(none)", style)
+    return Preformatted(wrap_code(text.strip() or "(none)"), style)
 
 
 def report_to_pdf(report: FindingsReport, out_path: Path) -> Path:
@@ -73,10 +76,12 @@ def report_to_pdf(report: FindingsReport, out_path: Path) -> Path:
     story: list = [
         Paragraph("VulnEm Security Assessment Report", styles["title"]),
         Spacer(1, 4),
-        Paragraph(_escape(
-            f"Target: {report.target} &nbsp;·&nbsp; Model: {report.model}<br/>"
-            f"Started: {report.started_at} &nbsp;·&nbsp; Finished: {report.finished_at}"
-        ), styles["meta"]),
+        Paragraph(
+            _escape(f"Target: {report.target}") + " &nbsp;·&nbsp; "
+            + _escape(f"Model: {report.model}") + "<br/>"
+            + _escape(f"Started: {report.started_at}")
+            + " &nbsp;·&nbsp; " + _escape(f"Finished: {report.finished_at}"),
+            styles["meta"]),
         Spacer(1, 10),
     ]
 
@@ -119,7 +124,7 @@ def report_to_pdf(report: FindingsReport, out_path: Path) -> Path:
             meta.append(f"File: {f.file}" + (f":{f.line}" if f.line else ""))
         if f.reported_by:
             meta.append(f"Reported by: {f.reported_by}")
-        story += [Paragraph(_escape(" &nbsp;·&nbsp; ".join(meta)), styles["meta"]),
+        story += [Paragraph(" &nbsp;·&nbsp; ".join(_escape(m) for m in meta), styles["meta"]),
                   Spacer(1, 6), Paragraph("Description", styles["h3"]),
                   Paragraph(_escape(f.description), styles["body"]),
                   Paragraph("Proof of Concept", styles["h3"]),

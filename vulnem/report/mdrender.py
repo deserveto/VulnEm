@@ -14,6 +14,10 @@ tables, bullets, bold, emoji. Two consumers need different treatment:
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from reportlab.platypus import Table
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _FENCE_RE = re.compile(r"^```")
@@ -22,6 +26,28 @@ _BULLET_RE = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
 # glyphs Helvetica can't draw (emoji, dingbats, box-drawing)
 _UNPRINTABLE_RE = re.compile(
     "[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u2190-\u21FF\u2500-\u25FF]")
+
+# A4 (210mm) minus the report's 2x18mm side margins ≈ 493pt; tables must
+# fit inside this or reportlab overlaps/overflows the frame.
+FRAME_W = 490
+# Courier 7.5pt ≈ 4.5pt/char → ~109 chars fit the frame; wrap with headroom.
+CODE_WRAP_COLS = 100
+
+
+def wrap_code(text: str, cols: int = CODE_WRAP_COLS) -> str:
+    """Hard-wrap code/evidence lines so Preformatted stays inside the frame.
+
+    ``Preformatted`` never wraps: a 300-char JWT or curl line just draws past
+    the right margin (overlapping the page edge). Continuations indent by
+    two spaces so wrapped runs stay visually grouped.
+    """
+    out: list[str] = []
+    for line in text.splitlines():
+        while len(line) > cols:
+            out.append(line[:cols])
+            line = "  " + line[cols:]
+        out.append(line)
+    return "\n".join(out)
 
 
 def normalize_summary_md(text: str, *, demote: int = 2) -> str:
@@ -49,17 +75,73 @@ def normalize_summary_md(text: str, *, demote: int = 2) -> str:
 
 
 def md_inline(text: str) -> str:
-    """Escape XML and convert inline markdown to reportlab paragraph markup."""
+    """Escape XML and convert inline markdown to reportlab paragraph markup.
+
+    Code spans are stashed behind NUL sentinels FIRST and restored last:
+    running bold/italic over text that already contains ``<font>`` tags
+    lets their regexes match across a tag (e.g. `` `a *b` c* ``) and emit
+    interleaved markup (``<i><font>..</i></font>``) that reportlab cannot
+    parse — PDF generation dies on the whole report.
+    """
     text = _UNPRINTABLE_RE.sub("", text)
     text = (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+    codes: list[str] = []
+
+    def _stash(m: re.Match[str]) -> str:
+        codes.append(m.group(1))
+        return f"\x00{len(codes) - 1}\x00"
+
+    text = re.sub(r"`([^`]+)`", _stash, text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", text)
-    text = re.sub(r"`([^`]+)`", r'<font face="Courier">\1</font>', text)
-    return text
+    return re.sub(
+        r"\x00(\d+)\x00",
+        lambda m: f'<font face="Courier">{codes[int(m.group(1))]}</font>',
+        text)
 
 
 def _split_table_row(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
+def _md_table(rows: list[list[str]], styles: dict) -> Table:
+    """Build a wrapping table: cells become Paragraphs (raw strings never
+    wrap in reportlab and long content overlaps the next column) and column
+    widths are proportional to content, scaled to fit the frame."""
+    from reportlab.lib import colors
+    from reportlab.platypus import Paragraph, Table, TableStyle
+
+    cell_style = styles.get("cell", styles["body"])
+    ncols = len(rows[0])
+    weights = [max(max(len(r[c]) for r in rows), 4) for c in range(ncols)]
+    total = float(sum(weights))
+    min_w = 34.0
+    widths = [max(min_w, FRAME_W * w / total) for w in weights]
+    over = sum(widths) - FRAME_W
+    if over > 0:
+        room = [(i, widths[i] - min_w) for i in range(ncols) if widths[i] > min_w]
+        reducible = sum(r for _, r in room)
+        if reducible > 0:
+            for i, r in room:
+                widths[i] -= over * r / reducible
+        # float drift guard: exact proportional squeeze to the frame
+        total_w = sum(widths)
+        if total_w > FRAME_W:
+            widths = [w * FRAME_W / total_w for w in widths]
+    cells = [[Paragraph(md_inline(c) or "&nbsp;", cell_style) for c in row]
+             for row in rows]
+    table = Table(cells, colWidths=widths, hAlign="LEFT", repeatRows=1)
+    table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ecf0f1")),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#bdc3c7")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    return table
 
 
 def markdown_flowables(text: str, styles: dict):
@@ -68,8 +150,7 @@ def markdown_flowables(text: str, styles: dict):
     Handles: fenced code blocks, ATX headings, pipe tables, bullet/ordered
     lists, plain paragraphs. Everything else falls back to a paragraph.
     """
-    from reportlab.lib import colors
-    from reportlab.platypus import Paragraph, Preformatted, Spacer, Table, TableStyle
+    from reportlab.platypus import Paragraph, Preformatted, Spacer
 
     flows: list = []
     lines = text.splitlines()
@@ -86,7 +167,7 @@ def markdown_flowables(text: str, styles: dict):
                 block.append(lines[i])
                 i += 1
             i += 1  # closing fence
-            flows.append(Preformatted("\n".join(block), styles["code"]))
+            flows.append(Preformatted(wrap_code("\n".join(block)), styles["code"]))
             continue
         m = _HEADING_RE.match(line)
         if m:
@@ -105,15 +186,7 @@ def markdown_flowables(text: str, styles: dict):
                 i += 1
             width = max(len(header), *(len(r) for r in rows)) if rows else len(header)
             rows = [r + [""] * (width - len(r)) for r in rows]
-            table = Table(rows, hAlign="LEFT")
-            table.setStyle(TableStyle([
-                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ecf0f1")),
-                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#bdc3c7")),
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ]))
-            flows += [Spacer(1, 4), table, Spacer(1, 6)]
+            flows += [Spacer(1, 4), _md_table(rows, styles), Spacer(1, 6)]
             continue
         if _BULLET_RE.match(line):
             items: list[str] = []
