@@ -180,7 +180,7 @@ class Coordinator:
         self,
         *,
         run_dir: Path,
-        max_agents: int = 8,
+        max_agents: int = 12,
         budget: Budget | None = None,
         on_event: Any | None = None,
     ) -> None:
@@ -214,9 +214,13 @@ class Coordinator:
     ) -> AgentRecord:
         if name in self._by_name or name == "system":
             raise ValueError(f"agent name {name!r} already in use")
-        if len(self.agents) >= self.max_agents:
+        # The cap bounds LIVE (non-terminal) agents: finished specialists free
+        # their slot so follow-ups can be spawned; names stay reserved forever.
+        live = sum(1 for a in self.agents.values() if not a.terminal)
+        if live >= self.max_agents:
             raise ValueError(
-                f"agent cap reached ({self.max_agents}); stop an agent or finish the scan"
+                f"agent cap reached ({self.max_agents} live); wait for a specialist "
+                f"to finish, stop one with stop_agent, or finish the scan"
             )
         self._counter += 1
         record = AgentRecord(

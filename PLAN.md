@@ -297,6 +297,45 @@ launch is a real `python -m vulnem.cli ...` subprocess.
   findings survive, finish_scan ends the run); offline regression in
   `tests/test_agents.py::test_real_interrupt_leaves_run_resumable`.
 
+### 2026-08-17 — white-box reliability round (post-mortem on bursanalar run)
+
+A real white-box run (Next.js/TS target) surfaced five compounding issues:
+5/8 agents died at per-agent turn caps (root picked 25–40; the fix run's
+caps were 55–70 and everything completed); the vendored semgrep ruleset was
+Python-only so semgrep silently scanned **zero** TS files and every
+white-box agent burned its turns `cat`-ing the tree manually; terminal
+agents never freed agent-cap slots so root's closing specialists were
+refused twice ("agent cap reached") and a validated open-redirect lead
+died unfiled; a coverage-complete negative result self-reported status
+"failed" (model read "no findings" as mission failure); and tools phoned
+home (semgrep.dev ×19, api.pdtm.sh ×2) into the scope proxy. Fixes:
+9 TS/JS sink rules in `containers/semgrep-rules/` (85 leads on the same
+source; build-time `--validate` gate covers them); `DEFAULT_CHILD_MAX_TURNS`
+30→55 + `DEFAULT_MAX_AGENTS` 8→12 + root-prompt cap guidance with concrete
+numbers; the cap now counts **live** agents so finished/stopped specialists
+free their slot (error text finally true); agent_finish schema + specialist
+prompt say a clean zero-finding audit is "completed"; sandbox shims silence
+phone-home (`httpx/subfinder/katana/nuclei` append `-disable-update-check`,
+katana also `-scp` the baked Playwright Chromium — its `-headless` mode
+otherwise downloads one at runtime through the proxy — and `semgrep` appends
+`--metrics=off --disable-version-check`; `SEMGREP_SEND_METRICS=off` alone
+only kills telemetry, not the version check). Verified: netcat-as-proxy
+shows zero CONNECTs for semgrep, katana headless crawls, ruff+269 tests
+green. Re-run on the same target: 6/6 agents completed, 151/300 turns,
+3 findings (1 high) vs 4 low/med with 6 failures before.
+
+Follow-up the same day, found by `scripts/tool_probe.py` (new keyless
+harness: real sandbox + scope proxy, no LLM): the katana shim's
+unconditional `-scp/-nos` made katana REJECT every non-headless run
+("headless mode is required if -ho, -nos or -scp are set") — crawls
+silently returned 0 URLs in every scan since (agents hid stderr with
+`2>/dev/null`); and the nuclei template bake silently installed nothing
+because `-disable-update-check` no-ops `-update-templates` (fix: bake via
+`nuclei.real`). After: katana crawls in both modes (headless uses the
+baked Playwright Chromium), nuclei runs 961 baked templates through the
+proxy, httpx/curl verified, and a netcat-as-proxy probe shows the tools'
+only CONNECT is the target itself — zero phone-home.
+
 ---
 
 ## Cross-cutting rules

@@ -71,3 +71,112 @@ rules:
       - pattern: flask.render_template_string(...)
       - pattern: render_template_string(...)
       - pattern: $APP.jinja_env.from_string(...)
+
+  # -- TypeScript / JavaScript (Next.js, Node, React) -------------------------
+
+  - id: tsjs-sql-string-concat
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: SQL query built via interpolation/concatenation (injection sink)
+    metadata: {class: sql_injection, cwe: CWE-89}
+    pattern-either:
+      - pattern: $DB.$queryRawUnsafe(...)
+      - pattern: $DB.$executeRawUnsafe(...)
+      - pattern: $DB.query(`...${...}...`)
+      - pattern: $DB.execute(`...${...}...`)
+      - pattern: $DB.query($A + $B)
+      - pattern: $DB.execute($A + $B)
+      - pattern: $DB.$QUERY(`...${...}...`)
+
+  - id: tsjs-command-injection
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: shell command built from variables (command-injection sink)
+    metadata: {class: command_injection, cwe: CWE-78}
+    pattern-either:
+      - pattern: $CP.exec(`...${...}...`)
+      - pattern: $CP.exec($A + $B)
+      - pattern: $CP.execSync(`...${...}...`)
+      - pattern: $CP.execSync($A + $B)
+      - pattern: '$CP.spawn(..., { ..., shell: true, ... })'
+      - pattern: '$CP.spawnSync(..., { ..., shell: true, ... })'
+
+  - id: tsjs-eval-new-function
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: dynamic code execution sink
+    metadata: {class: code_execution, cwe: CWE-95}
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+
+  - id: tsjs-xss-html-sinks
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: HTML assigned/built from variables (XSS sink)
+    metadata: {class: xss, cwe: CWE-79}
+    pattern-either:
+      - pattern: $EL.innerHTML = ...
+      - pattern: $EL.outerHTML = ...
+      - pattern: $EL.insertAdjacentHTML($POS, $HTML)
+      - pattern: document.write(...)
+
+  - id: tsjs-xss-react-dangerous-html
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: React dangerouslySetInnerHTML fed a variable (XSS sink)
+    metadata: {class: xss, cwe: CWE-79}
+    pattern-either:
+      - pattern: '<$EL dangerouslySetInnerHTML={{ __html: $X }} />'
+      - pattern: '<$EL dangerouslySetInnerHTML={{ __html: $X }}>$CHILDREN</$EL>'
+
+  - id: tsjs-path-join-read
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: file read on a joined path that may carry user input (traversal sink)
+    metadata: {class: path_traversal, cwe: CWE-22}
+    pattern-either:
+      - pattern: $FS.readFile(path.join($BASE, $REQ), ...)
+      - pattern: $FS.readFileSync(path.join($BASE, $REQ), ...)
+      - pattern: $FS.createReadStream(path.join($BASE, $REQ), ...)
+      - pattern: $FS.readFile($BASE + $REQ, ...)
+      - pattern: $FS.readFileSync($BASE + $REQ, ...)
+      - pattern: $FS.readFileSync(join($BASE, $REQ), ...)
+
+  - id: tsjs-open-redirect
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: redirect target built from variables (open-redirect sink)
+    metadata: {class: open_redirect, cwe: CWE-601}
+    pattern-either:
+      - pattern: $RES.redirect($A + $B)
+      - pattern: $RES.redirect(`...${...}...`)
+      - pattern: $LOC.href = $A + $B
+      - pattern: $LOC.href = `...${...}...`
+      - pattern: $LOC.assign($A + $B)
+      - pattern: $LOC.assign(`...${...}...`)
+      - pattern: $LOC.replace(`...${...}...`)
+
+  - id: tsjs-hardcoded-secret
+    languages: [typescript, javascript]
+    severity: WARNING
+    message: hardcoded secret-like assignment
+    metadata: {class: hardcoded_secret, cwe: CWE-798}
+    patterns:
+      - pattern-either:
+          - pattern: const $VAR = "..."
+          - pattern: let $VAR = "..."
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i).*(api_key|apikey|secret|token|password|passwd|pwd).*
+
+  - id: tsjs-jwt-hardcoded-secret
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: JWT signed/verified with a hardcoded string key
+    metadata: {class: hardcoded_secret, cwe: CWE-321}
+    pattern-either:
+      - pattern: $JWT.sign($PAYLOAD, "...")
+      - pattern: $JWT.verify($TOKEN, "...")
+      - pattern: $JWT.sign($PAYLOAD, new TextEncoder().encode("..."))
+      - pattern: $JWT.verify($TOKEN, new TextEncoder().encode("..."))

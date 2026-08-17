@@ -96,5 +96,19 @@ docker compose -p vulnem-lab -f lab/docker-compose.yml up -d
   servers by PID from `netstat`, never by image name.
 - Root's `create_agent max_turns` overrides `VULNEM_CHILD_MAX_TURNS`; for
   slow Pro models use budget 300+ and child caps 55+.
+- Sandbox shims: `httpx/subfinder/katana/nuclei` and `semgrep` in the image
+  are shell wrappers (real binaries are `*.real` beside them) appending
+  `-disable-update-check` (PD tools; katana adds `-scp <baked chromium> -nos`
+  only when `-hl/-hh` is present — katana rejects those flags otherwise),
+  and `--metrics=off --disable-version-check` (semgrep) — tool phone-home
+  hits the scope proxy and pollutes blocked-event logs. Extend the wrappers
+  in `containers/Dockerfile`, never bypass them; the one exception is the
+  nuclei template bake, which must call `nuclei.real -update-templates`
+  because `-duc` silently no-ops template updates. The vendored semgrep
+  rules (`containers/semgrep-rules/`) must keep a rule language for every
+  stack you scan — semgrep silently scans ZERO files when no rule matches
+  the target's languages (check `.paths.scanned` in the JSON, not just
+  results). `scripts/tool_probe.py` runs the wrapped tools through a real
+  sandbox+proxy stack (no LLM) to verify all of this end-to-end.
 - `vulnem report` rewrites report.md too; agent summaries are rendered by
   `vulnem/report/mdrender.py` (not raw pasted markdown).

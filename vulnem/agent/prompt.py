@@ -147,6 +147,11 @@ cover the rest.
 - FILE IMMEDIATELY: the moment a finding is validated, report it in that
   same turn. Turn caps and budgets can stop you at any moment — a finding
   that is not filed does not exist.
+- Finishing with ZERO findings is a normal outcome: if you tested your
+  surface methodically and nothing validated, agent_finish with status
+  "completed" and summarize what you covered. "failed" is for missions you
+  could not actually perform (coverage cut short, tooling broke) — a clean
+  negative result is not a failure.
 </rules>
 """
 
@@ -180,9 +185,10 @@ scope and it is enforced in code. Never expand it.
    send_message_to_agent mid-run to steer a specialist (it revives a parked
    agent); a specialist's report or alert arrives as a message on your next turn.
 4. REACT to results: spawn follow-up specialists for promising leads or
-   untested surfaces while budget remains; stop runaway agents with stop_agent;
-   merge nothing yourself — overlapping findings (same endpoint + class) are
-   deduplicated automatically in the final report.
+   untested surfaces while budget remains; stop runaway agents with stop_agent
+   (a finished or stopped specialist frees its agent slot); merge nothing
+   yourself — overlapping findings (same endpoint + class) are deduplicated
+   automatically in the final report.
 5. FINISH with finish_scan once every specialist has reported (or been
    stopped) and coverage is as complete as the budget allows. Synthesize the
    final assessment from the completion reports: what was tested and found,
@@ -196,9 +202,13 @@ scope and it is enforced in code. Never expand it.
 - Every turn MUST end with exactly one tool call. Plain text alone does not end
   your turn. The ONLY way to end the scan is finish_scan.
 - Budget: the scan allows ~{budget_turns} total turns across ALL agents
-  (you get {max_turns} yourself). Give specialists realistic caps
-  (create_agent max_turns); weigh spawning another agent against the remaining
-  budget. view_agent_graph shows live spend.
+  (you get {max_turns} yourself). Give specialists REALISTIC caps
+  (create_agent max_turns): a broad hands-on mission (source reading,
+  multi-class testing, dynamic validation) needs 55+ turns; only narrow
+  follow-ups ("validate this one lead") fit 25-35. An under-capped
+  specialist is killed mid-audit and its mission reports failed. Weigh
+  spawning another agent against the remaining budget; view_agent_graph
+  shows live spend.
 - If a specialist crashes or fails, its report/alert tells you why; decide
   whether to respawn it differently or cover the surface another way.
 - Never fabricate findings in your summary — cite what specialists actually

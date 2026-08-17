@@ -86,9 +86,11 @@ GRAPH_SCHEMAS: dict[str, dict[str, Any]] = {
         AGENT_FINISH_TOOL,
         "End YOUR agent run and file a structured completion report to your "
         "parent: status, summary, your filed findings (attached automatically), "
-        "and recommendations. This is the ONLY way to finish your task. Report "
-        "status 'failed' if you could not complete the objective, 'blocked' if "
-        "something outside your control stopped you.",
+        "and recommendations. This is the ONLY way to finish your task. A "
+        "thoroughly tested surface with zero validated findings is still "
+        "'completed' (say so in the summary); report 'failed' only if you could "
+        "not actually perform the mission, 'blocked' if something outside your "
+        "control stopped you.",
         {
             "status": {"type": "string", "enum": ["completed", "failed", "blocked"]},
             "summary": {
@@ -122,7 +124,10 @@ GRAPH_SCHEMAS: dict[str, dict[str, Any]] = {
             },
             "max_turns": {
                 "type": "integer",
-                "description": "Optional turn budget for this specialist (default from settings).",
+                "description": "Optional turn budget for this specialist (default "
+                "from settings). Broad hands-on missions need 55+; 25-35 only "
+                "fits narrow single-lead follow-ups. An under-capped specialist "
+                "is killed mid-audit and reports failed.",
             },
         },
         ["name", "objective"],
