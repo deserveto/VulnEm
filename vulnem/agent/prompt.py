@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
 from vulnem.scope import Scope
 
 # Shared blocks -------------------------------------------------------------
@@ -189,11 +191,17 @@ scope and it is enforced in code. Never expand it.
    (a finished or stopped specialist frees its agent slot); merge nothing
    yourself — overlapping findings (same endpoint + class) are deduplicated
    automatically in the final report.
-5. FINISH with finish_scan once every specialist has reported (or been
-   stopped) and coverage is as complete as the budget allows. Synthesize the
-   final assessment from the completion reports: what was tested and found,
-   findings by severity, coverage gaps, overall posture. Remaining live agents
-   are stopped when you finish.
+5. FINISH: first file your coverage checklist with report_coverage — one row
+   per area the scan accounted for (status tested_clean / tested_findings /
+   skipped / partial; skipped and partial rows need a note saying why). At
+   MINIMUM account for these classes: auth flows, access control, injection,
+   client-side, upload, business logic, config/headers, secrets — plus
+   free-form rows for anything target-specific. finish_scan without coverage
+   is bounced back once. Then finish_scan once every specialist has reported
+   (or been stopped) and coverage is as complete as the budget allows.
+   Synthesize the final assessment from the completion reports: what was
+   tested and found, findings by severity, coverage gaps, overall posture.
+   Remaining live agents are stopped when you finish.
 </how_to_work>
 
 <rules>
@@ -220,6 +228,11 @@ scope and it is enforced in code. Never expand it.
 _WHITEBOX_BLOCK = """
 ## White-box source access
 The target's source code is mounted READ-ONLY at {mount}. Use it:
+- READ {map_path} FIRST — a generated map of the stack, API routes (with
+  methods), pages, security-relevant files, and env var names. Verify its
+  details against the source as you go; do NOT re-derive the tree with
+  find/cat — that burns turns the audit needs. If the map is missing, fall
+  back to `find {mount} -type f | head -50`.
 - Read the code (rg, sed) to trace input flow to sinks — don't guess black-box.
 - First pass: `semgrep --config /opt/semgrep-rules --json {mount} > /tmp/semgrep.json`
   (vendored rules, no internet needed). Treat hits as LEADS, not findings.
@@ -236,7 +249,11 @@ The target's source code is mounted READ-ONLY at {mount}. Use it:
 
 
 def _whitebox(mount: str | None) -> str:
-    return _WHITEBOX_BLOCK.format(mount=mount) if mount else ""
+    if not mount:
+        return ""
+    return _WHITEBOX_BLOCK.format(
+        mount=mount, map_path=str(PurePosixPath(mount).with_name("source-map.md"))
+    )
 
 
 def build_system_prompt(scope: Scope, *, max_turns: int,
@@ -312,11 +329,14 @@ def build_root_initial_task(scope: Scope, *, focus: str | None = None,
         "finish with an executive assessment via finish_scan."
     )
     if whitebox_mount:
+        map_path = PurePosixPath(whitebox_mount).with_name("source-map.md")
         task += (
             f"\n\nWhite-box mode: the target's source is mounted read-only at "
-            f"{whitebox_mount}. Read the `whitebox` skill and include at least "
-            "one source-analysis mission (semgrep + code reading, findings "
-            "with file:line and fix patches)."
+            f"{whitebox_mount}, with a generated source map at {map_path}. "
+            "Read the `whitebox` skill and include at least one "
+            "source-analysis mission (semgrep + code reading, findings with "
+            "file:line and fix patches) — tell those specialists to read the "
+            f"map at {map_path} first instead of deriving the tree themselves."
         )
     if focus:
         task += f"\n\n{focus}"

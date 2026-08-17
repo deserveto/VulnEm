@@ -79,10 +79,18 @@ SLOW_P1 = [
 ]
 
 # Phase 2 scripts — used only after the interrupt. Root re-parks (woken by
-# slow-mapper's completion report), surveys, then finishes the scan.
+# slow-mapper's completion report), surveys, files coverage, then finishes.
 ROOT_P2 = [
     ("", "wait_for_agents", {}),
     ("", "view_agent_graph", {}),
+    ("Filing the coverage checklist.", "report_coverage", {"rows": [
+        {"area": "recon", "surface": "reachability probe",
+         "status": "tested_findings", "agent": "fast-prober"},
+        {"area": "surface sweep", "surface": "endpoint mapping",
+         "status": "tested_clean", "agent": "slow-mapper"},
+        {"area": "auth flows", "surface": "login flows", "status": "skipped",
+         "note": "unauthenticated mock run"},
+    ]}),
     ("Resumed scan complete.", "finish_scan", {"summary":
         "Resumed scan finished: slow-mapper continued its sweep after the "
         "interruption and completed properly; the pre-interrupt finding "

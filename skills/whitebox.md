@@ -11,13 +11,21 @@ the workflow, not the standards — every finding still needs dynamic proof.
 
 ## Workflow
 
-1. **Orient** (2-3 commands, cheap):
+1. **Orient** (1 read, cheap):
+   ```
+   cat /home/pentester/source-map.md
+   ```
+   The generated source map: stack summary, API routes with exported HTTP
+   methods, pages, security-relevant files (auth/middleware/upload/rate-limit
+   keyword hits), env var names. It is a STARTING POINT — verify details
+   against the source as you go, and map its routes onto what recon saw. If
+   the map is missing, fall back to:
    ```
    find /home/pentester/source -type f | head -50
    rg -n "route|@app|def do_|handler" /home/pentester/source --max-count 50
    ```
-   Map files to the routes you already know from recon. Identify the
-   framework/stack before reading deep.
+   Do not re-derive the tree with find/cat when the map exists — those turns
+   belong to the audit.
 
 2. **Semgrep first pass** (vendored rules — no internet needed):
    ```

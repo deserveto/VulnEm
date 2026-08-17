@@ -79,6 +79,11 @@ class Sandbox:
         return self._network
 
     @property
+    def source_dir(self) -> str | None:
+        """Host directory mounted read-only into the sandbox (or None)."""
+        return self._source_dir
+
+    @property
     def source_mount(self) -> str | None:
         """In-sandbox path where --source is mounted read-only (or None)."""
         return f"/home/{self._user}/source" if self._source_dir else None

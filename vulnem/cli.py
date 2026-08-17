@@ -150,6 +150,12 @@ def _on_event(event: dict) -> None:
         state = "ok" if event.get("ok") else "FAILED"
         console.print(f"[blue]◉ auth session[/blue] {state} via {event.get('method')} "
                       f"(cookies: {', '.join(event.get('cookie_names') or []) or 'none'})")
+    elif kind == "source_map_generated":
+        console.print(f"[dim]source map → {event.get('path')} "
+                      f"({event.get('bytes', 0)} bytes)[/dim]")
+    elif kind == "coverage_report":
+        console.print(f"[green]▸ coverage[/green] checklist filed: "
+                      f"{len(event.get('rows') or [])} row(s)")
     elif kind == "proxy_started":
         console.print(f"[dim]proxy sidecar {event.get('sidecar')} up "
                       f"(scope: {', '.join(event.get('scope_hosts') or [])})[/dim]")
@@ -161,6 +167,16 @@ def _on_event(event: dict) -> None:
         )
 
 
+def _load_coverage_rows(run_dir: Path) -> list[dict]:
+    """Coverage rows root filed via report_coverage (coverage.json); [] if none."""
+    try:
+        data = json.loads((run_dir / "coverage.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = data.get("rows")
+    return rows if isinstance(rows, list) else []
+
+
 def _write_report(run_dir: Path, settings: Settings, scope: Scope,
                   started_at: str, result) -> FindingsReport:
     report = FindingsReport(
@@ -170,6 +186,7 @@ def _write_report(run_dir: Path, settings: Settings, scope: Scope,
         model=settings.model,
         summary=result.summary or "(no summary)",
         findings=result.findings,
+        coverage=_load_coverage_rows(run_dir),
     )
     report.write(run_dir)
     _export_machine_reports(run_dir, report)
@@ -546,6 +563,7 @@ def _run_resume(settings: Settings, run_dir: Path, *, model: str | None = None,
         user=settings.sandbox_user,
         network=settings.docker_network,
         proxy_url=proxy.sandbox_proxy_url if proxy else None,
+        source_dir=config.get("source"),  # keep the white-box mount on resume
     )
     try:
         sandbox.start()

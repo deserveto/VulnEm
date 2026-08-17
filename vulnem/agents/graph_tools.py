@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from vulnem.agent.prompt import build_specialist_prompt
@@ -30,6 +31,22 @@ AGENT_FINISH_TOOL = "agent_finish"
 
 _VALID_REPORT_STATUSES = {"completed", "failed", "blocked"}
 _NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
+
+# Coverage checklist (root-only): statuses a row may carry, and the class
+# FLOOR the root must at minimum account for before finishing. Run-to-run
+# coverage used to vary silently because decomposition is nondeterministic —
+# the floor plus free-form rows makes the gap visible instead.
+COVERAGE_STATUSES = ("tested_clean", "tested_findings", "skipped", "partial")
+COVERAGE_FLOOR = (
+    "auth flows",
+    "access control",
+    "injection",
+    "client-side",
+    "upload",
+    "business logic",
+    "config/headers",
+    "secrets",
+)
 
 # Minimum scan-budget headroom a new specialist must be able to draw on to be
 # spawnable at all — viability floors, not tuning knobs.
@@ -78,7 +95,9 @@ GRAPH_SCHEMAS: dict[str, dict[str, Any]] = {
         "End the ENTIRE scan (root/solo only). Call when all specialists have "
         "reported and you can write the final assessment: what was tested, what "
         "was found, coverage gaps, overall posture. This is the ONLY way to end "
-        "the scan. Remaining live agents will be stopped.",
+        "the scan. Remaining live agents will be stopped. Root: file your "
+        "coverage checklist with report_coverage FIRST — finishing without it "
+        "is bounced back once.",
         {"summary": {"type": "string", "description": "Executive summary in markdown."}},
         ["summary"],
     ),
@@ -186,6 +205,50 @@ GRAPH_SCHEMAS: dict[str, dict[str, Any]] = {
         },
         ["agent", "reason"],
     ),
+    "report_coverage": _fn(
+        "report_coverage",
+        "ROOT ONLY. File the scan's coverage checklist — one row per area the "
+        "scan accounted for, so coverage gaps are visible instead of silent. "
+        "Call BEFORE finish_scan (finishing without coverage is bounced once). "
+        "At MINIMUM account for these classes (rows matching them, honestly "
+        "marked): " + ", ".join(COVERAGE_FLOOR) + ". Add free-form rows for "
+        "anything target-specific beyond the floor.",
+        {
+            "rows": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "area": {
+                            "type": "string",
+                            "description": "Vulnerability class or surface, e.g. 'auth flows'.",
+                        },
+                        "surface": {
+                            "type": "string",
+                            "description": "What specifically was covered: endpoints, files, features.",
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": list(COVERAGE_STATUSES),
+                            "description": "tested_clean | tested_findings | skipped | partial.",
+                        },
+                        "agent": {
+                            "type": "string",
+                            "description": "Specialist that owned this area (optional).",
+                        },
+                        "note": {
+                            "type": "string",
+                            "description": "Short qualifier. REQUIRED for skipped/partial: say why.",
+                        },
+                    },
+                    "required": ["area", "surface", "status"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        ["rows"],
+    ),
 }
 
 SCHEMA_BY_NAME.update(GRAPH_SCHEMAS)
@@ -212,6 +275,24 @@ async def dispatch_graph_tool(name: str, args: dict[str, Any], sess: AgentSessio
 async def _tool_finish_scan(sess: AgentSession, args: dict[str, Any]) -> str:
     """End the whole scan: stop any still-live agents, record the summary."""
     coordinator = sess.coordinator
+    record = sess.record
+    # Single-bounce coverage guard (root only): the FIRST coverage-less
+    # finish_scan is rejected with the floor classes; the SECOND always goes
+    # through. The lifecycle exit must never trap the model — hence exactly
+    # one bounce, tracked on the record and preserved across resume.
+    if (record.role == "root" and record.coverage_report is None
+            and not record.coverage_bounce_used):
+        record.coverage_bounce_used = True
+        await coordinator.snapshot_async()
+        return json.dumps({"ok": False, "error": (
+            "finish_scan bounced (once): no coverage checklist filed yet. "
+            "Call report_coverage first — one row per area with status "
+            "tested_clean / tested_findings / skipped / partial (skipped and "
+            "partial rows need a note saying why). At minimum account for: "
+            + "; ".join(COVERAGE_FLOOR)
+            + ". Free-form rows for target-specific areas are welcome. This "
+              "bounce happens at most once: a second finish_scan goes through."
+        )})
     summary = str(args.get("summary") or "(no summary provided)")
     stopped: list[str] = []
     for record in list(coordinator.agents.values()):
@@ -424,6 +505,82 @@ async def _tool_stop_agent(sess: AgentSession, args: dict[str, Any]) -> str:
     return json.dumps({"ok": True, "note": msg})
 
 
+# Floor class → keywords that mark a coverage row as accounting for it (the
+# match is a nudge surfaced back to root, never a gate).
+_COVERAGE_FLOOR_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "auth flows": ("auth", "login", "session", "jwt"),
+    "access control": ("access", "idor", "authorization", "authz"),
+    "injection": ("inject", "sqli", "sql"),
+    "client-side": ("client", "xss", "dom"),
+    "upload": ("upload",),
+    "business logic": ("business", "logic"),
+    "config/headers": ("config", "header", "cors"),
+    "secrets": ("secret", "key", "token"),
+}
+
+
+async def _tool_report_coverage(sess: AgentSession, args: dict[str, Any]) -> str:
+    """Root files the coverage checklist: stored on the record, persisted to
+    coverage.json in the run dir, emitted as a transcript event, and rendered
+    into report.md's Coverage section."""
+    record = sess.record
+    if record.role != "root":
+        return json.dumps({"ok": False, "error": "report_coverage is root-only"})
+    raw = args.get("rows")
+    if not isinstance(raw, list) or not raw:
+        return json.dumps({"ok": False, "error": "rows must be a non-empty list"})
+    rows: list[dict[str, Any]] = []
+    for i, r in enumerate(raw):
+        if not isinstance(r, dict):
+            return json.dumps({"ok": False, "error": f"rows[{i}] must be an object"})
+        area = str(r.get("area") or "").strip()
+        surface = str(r.get("surface") or "").strip()
+        status = str(r.get("status") or "").strip()
+        if not area or not surface:
+            return json.dumps({"ok": False,
+                               "error": f"rows[{i}]: area and surface are required"})
+        if status not in COVERAGE_STATUSES:
+            return json.dumps({"ok": False,
+                               "error": f"rows[{i}]: status must be one of "
+                                        f"{list(COVERAGE_STATUSES)}"})
+        note = str(r.get("note") or "").strip()
+        if status in ("skipped", "partial") and not note:
+            return json.dumps({"ok": False,
+                               "error": f"rows[{i}] ({area!r}) is {status} — "
+                                        "add a note saying why"})
+        row: dict[str, Any] = {"area": area, "surface": surface, "status": status}
+        agent = str(r.get("agent") or "").strip()
+        if agent:
+            row["agent"] = agent
+        if note:
+            row["note"] = note
+        rows.append(row)
+
+    record.coverage_report = {"rows": rows}
+    run_dir = getattr(sess.ctx, "run_dir", None)
+    if run_dir is not None:
+        (Path(run_dir) / "coverage.json").write_text(
+            json.dumps({"filed_by": record.name, "rows": rows}, indent=2),
+            encoding="utf-8",
+        )
+    sess.coordinator.emit({"type": "coverage_report", "agent": record.name, "rows": rows})
+
+    blob = " ".join(r["area"].lower() for r in rows)
+    gaps = [c for c, keys in _COVERAGE_FLOOR_KEYWORDS.items()
+            if not any(k in blob for k in keys)]
+    result: dict[str, Any] = {
+        "ok": True,
+        "filed": len(rows),
+        "note": "coverage filed; finish_scan is unblocked",
+    }
+    if gaps:
+        result["floor_gaps"] = gaps
+        result["note"] += (" — no rows account for: " + "; ".join(gaps)
+                           + ". Consider rows (or explicit skipped/partial rows)"
+                           " for them.")
+    return json.dumps(result)
+
+
 _HANDLERS = {
     FINISH_TOOL: _tool_finish_scan,
     AGENT_FINISH_TOOL: _tool_agent_finish,
@@ -432,4 +589,5 @@ _HANDLERS = {
     "send_message_to_agent": _tool_send_message,
     "wait_for_agents": _tool_wait_for_agents,
     "stop_agent": _tool_stop_agent,
+    "report_coverage": _tool_report_coverage,
 }

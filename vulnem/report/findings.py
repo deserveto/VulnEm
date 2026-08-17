@@ -56,6 +56,11 @@ class FindingsReport(BaseModel):
     model: str
     summary: str
     findings: list[Finding] = []
+    coverage: list[dict[str, str]] = Field(
+        default_factory=list,
+        description="Coverage checklist rows filed by root via report_coverage "
+                    "(area/surface/status/agent/note); empty = none filed.",
+    )
 
     def counts(self) -> dict[str, int]:
         counts = {sev: 0 for sev in SEVERITIES}
@@ -99,6 +104,7 @@ class FindingsReport(BaseModel):
                   # headings so it nests under this section instead of
                   # hijacking the document hierarchy
                   normalize_summary_md(self.summary), ""]
+        lines += _coverage_section(self.coverage)
 
         ordered = sorted(self.findings, key=lambda f: f.sort_key())
         for i, f in enumerate(ordered, start=1):
@@ -125,6 +131,54 @@ class FindingsReport(BaseModel):
                 lines += ["", "### Fix Patch", "", "```diff", f.fix_patch.strip(), "```"]
             lines += ["", "---", ""]
         return "\n".join(lines)
+
+
+_COVERAGE_STATUS_LABELS = {
+    "tested_clean": "tested — clean",
+    "tested_findings": "tested — findings",
+    "skipped": "skipped",
+    "partial": "partial",
+}
+
+
+def _coverage_section(coverage: list[dict[str, str]]) -> list[str]:
+    """Render the root's coverage checklist: what was tested (clean or with
+    findings), what was skipped and why. Absent when root filed none."""
+    if not coverage:
+        return []
+    counts: dict[str, int] = {}
+    for row in coverage:
+        status = str(row.get("status") or "?")
+        counts[status] = counts.get(status, 0) + 1
+    tally = " · ".join(
+        f"{n} {_COVERAGE_STATUS_LABELS.get(s, s)}" for s, n in
+        sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    )
+    lines = [
+        "## Coverage",
+        "",
+        "Areas the orchestrator accounted for before finishing. Skipped and",
+        "partial rows carry the reason in their note.",
+        "",
+        f"*{tally}*",
+        "",
+        "| Area | Surface | Status | Agent | Note |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+
+    def _cell(row: dict[str, str], key: str) -> str:
+        value = str(row.get(key) or "").strip()
+        return value.replace("|", "\\|").replace("\n", " ") or "—"
+
+    for row in coverage:
+        status = str(row.get("status") or "")
+        status_cell = _COVERAGE_STATUS_LABELS.get(status, status) or "—"
+        lines.append(
+            "| " + " | ".join((_cell(row, "area"), _cell(row, "surface"),
+                                status_cell, _cell(row, "agent"),
+                                _cell(row, "note"))) + " |"
+        )
+    return [*lines, "", ""]
 
 
 def _normalize_endpoint(url: str) -> str:

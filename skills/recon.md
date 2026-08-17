@@ -42,6 +42,13 @@ plus every request any agent made) — cross-check katana/ffuf finds against
 it. For JS-rendered SPAs, `browser_navigate <target>` + `browser_read_page`
 exposes post-render links and forms curl will never see.
 
+DEFAULT, not a mandate: run one katana crawl AND one scoped nuclei pass
+(e.g. `nuclei -u <target> -severity medium,high,critical -silent`) as part
+of recon unless you can justify skipping them (note the reason via
+`think`). Both are preinstalled and verified in the sandbox, and they cover
+ground curl+browser walks miss. Strong models may deviate — the default
+exists so verified tooling is used by default, not skipped by oversight.
+
 ## Phase 3 — Inventory and prioritize
 
 Consolidate into `/tmp/endpoints.txt` (method + path + params + auth required?).

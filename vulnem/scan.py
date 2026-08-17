@@ -14,7 +14,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from vulnem.agent.prompt import (
@@ -76,6 +76,8 @@ def _restore_record(coordinator: Coordinator, data: dict[str, Any]) -> AgentReco
         turns_used=int(data.get("turns_used", 0)),
         total_tokens=int(data.get("total_tokens", 0)),
         completion_report=data.get("completion_report"),
+        coverage_report=data.get("coverage_report"),
+        coverage_bounce_used=bool(data.get("coverage_bounce_used", False)),
         error=data.get("error"),
         stop_reason=data.get("stop_reason", ""),
     )
@@ -230,6 +232,8 @@ async def run_scan(
     tasks: list[asyncio.Task] = []
     root_record: AgentRecord | None = None
     whitebox_mount = getattr(sandbox, "source_mount", None)
+    if whitebox_mount:
+        await _push_source_map(sandbox, coordinator.emit)
 
     def make_session(record: AgentRecord, *, system_prompt: str, initial_task: str,
                      tool_names: set[str], finish_tool: str,
@@ -414,6 +418,43 @@ async def run_scan(
         transcript_path=transcript,
         run_dir=run_dir,
     )
+
+
+def _source_map_target(mount: str) -> str:
+    """In-sandbox path of the generated map: next to the source mount."""
+    return str(PurePosixPath(mount).with_name("source-map.md"))
+
+
+async def _push_source_map(sandbox: Any, emit: Callable[[dict[str, Any]], None]) -> None:
+    """White-box: precompute the source map on the host and push it into the
+    sandbox, so specialists orient in one read instead of find/cat walks.
+
+    Best effort by design — a failed map never blocks the scan (agents fall
+    back to manual orientation per the whitebox skill).
+    """
+    mount = getattr(sandbox, "source_mount", None)
+    host_dir = getattr(sandbox, "source_dir", None)
+    put_file = getattr(sandbox, "put_file", None)
+    if not (mount and host_dir and callable(put_file)):
+        return
+
+    def _build_and_push() -> int:
+        from vulnem.sourcemap import generate_source_map
+
+        data = generate_source_map(Path(host_dir)).encode("utf-8")
+        put_file(data, _source_map_target(mount))
+        return len(data)
+
+    try:
+        size = await asyncio.to_thread(_build_and_push)
+        emit({
+            "type": "source_map_generated",
+            "path": _source_map_target(mount),
+            "source_dir": str(host_dir),
+            "bytes": size,
+        })
+    except Exception:
+        logger.exception("source map generation failed; agents will orient manually")
 
 
 def _set_proxy_effective(run_dir: Path, value: bool) -> None:

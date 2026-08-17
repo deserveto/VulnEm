@@ -109,3 +109,28 @@ def test_truncate_keeps_head_and_tail():
     assert "chars truncated" in out
     # short strings pass through untouched
     assert truncate("hello", 1000) == "hello"
+
+
+def test_report_markdown_renders_coverage_matrix():
+    report = FindingsReport(
+        target="http://t:80", started_at="t0", finished_at="t1", model="m",
+        summary="s", coverage=[
+            {"area": "auth flows", "surface": "login + reset",
+             "status": "tested_clean", "agent": "auth-probe"},
+            {"area": "injection", "surface": "search q param",
+             "status": "tested_findings"},
+            {"area": "upload", "surface": "none", "status": "skipped",
+             "note": "no upload feature | really"},
+            {"area": "business logic", "surface": "checkout",
+             "status": "partial", "note": "budget"},
+        ],
+    )
+    md = report.to_markdown()
+    assert "## Coverage" in md
+    assert "| Area | Surface | Status | Agent | Note |" in md
+    assert "tested — clean" in md and "tested — findings" in md
+    assert "skipped" in md and "no upload feature \\| really" in md  # cell escaping
+    # absent coverage → no section at all (old reports unchanged)
+    bare = FindingsReport(target="http://t:80", started_at="t0", finished_at="t1",
+                          model="m", summary="s")
+    assert "## Coverage" not in bare.to_markdown()

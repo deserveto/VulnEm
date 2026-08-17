@@ -82,6 +82,32 @@ leads without validating anything."
 - Crash/failure of a specialist is data: read the alert, respawn
   differently (narrower objective, different skill) or cover the surface in
   a follow-up mission.
+
+## 5. File coverage, then finish
+
+Before `finish_scan`, file the coverage checklist with `report_coverage`:
+one row per area the scan accounted for — `area`, `surface` (what exactly
+was covered), `status` (tested_clean / tested_findings / skipped /
+partial), the owning `agent`, and a `note` (mandatory for skipped/partial:
+say why). Skipping a finish without coverage gets bounced back once.
+
+The class list below is a FLOOR, not a ceiling — at minimum account for
+each of these (a row that honestly says "skipped: no upload feature found"
+still counts), and add free-form rows for target-specific areas beyond it:
+
+1. auth flows (login, registration, password reset, session/JWT handling)
+2. access control (IDOR, privilege boundaries, admin exposure)
+3. injection (SQL/NoSQL, command, SSTI on user input)
+4. client-side (XSS reflected/stored/DOM, open redirects)
+5. upload (file upload abuse, content-type/size validation)
+6. business logic (flow abuse, race conditions, price/quantity tampering)
+7. config/headers (security headers, CORS, verbose errors, debug routes)
+8. secrets (hardcoded keys, exposed config, env leakage)
+
+Honesty over completeness: a `skipped` row with a reason is worth more
+than a fabricated `tested_clean` — the checklist exists so coverage gaps
+are visible in the report instead of silently varying between runs.
+
 - Finish with `finish_scan` ONLY when every specialist has reported (or
   been stopped) and coverage is as complete as budget allows. Your summary
   is the report's executive summary: posture, findings by severity with

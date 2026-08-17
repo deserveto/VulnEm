@@ -70,6 +70,21 @@ ROOT_SCRIPT = [
     ("", "wait_for_agents", {}),
     ("", "wait_for_agents", {}),
     ("", "view_agent_graph", {}),
+    ("Filing the coverage checklist.", "report_coverage", {"rows": [
+        {"area": "recon + config/headers", "surface": "site-wide fingerprint",
+         "status": "tested_clean", "agent": "recon-mapper"},
+        {"area": "injection", "surface": "product search API",
+         "status": "tested_findings", "agent": "sqli-search"},
+        {"area": "access control", "surface": "admin/FTP routes",
+         "status": "tested_clean", "agent": "access-probe"},
+        {"area": "client-side", "surface": "home page via browser",
+         "status": "tested_findings", "agent": "xss-browser"},
+        {"area": "surface sweep", "surface": "endpoint mapping",
+         "status": "partial", "agent": "slow-mapper",
+         "note": "scan finished while the sweep was still running"},
+        {"area": "auth flows", "surface": "login flows",
+         "status": "skipped", "note": "unauthenticated mock run"},
+    ]}),
     ("Scan complete.", "finish_scan", {"summary":
         "Mock E2E multi-agent scan: four specialists ran in parallel "
         "(including a browser-driven one); overlapping findings were merged; "
@@ -292,6 +307,37 @@ def _verify(run_dir: Path) -> list[str]:
                      and e.get("msg_type") == "completion_report"]
     if not salvaged_msgs:
         problems.append("no salvaged completion_report message from slow-mapper to root")
+
+    # -- coverage checklist plumbing (report_coverage → coverage.json → report)
+    cov_events = [e for e in transcript if e["type"] == "coverage_report"]
+    if len(cov_events) != 1 or len(cov_events[0].get("rows") or []) != 6:
+        problems.append(f"coverage_report events wrong: {len(cov_events)} "
+                        "(want exactly 1 with 6 rows)")
+    try:
+        cov_file = json.loads((run_dir / "coverage.json").read_text(encoding="utf-8"))
+        if cov_file.get("filed_by") != "root" or len(cov_file.get("rows") or []) != 6:
+            problems.append("coverage.json missing or wrong shape")
+    except FileNotFoundError:
+        problems.append("coverage.json missing (report_coverage persistence)")
+    except ValueError:
+        problems.append("coverage.json is not valid JSON")
+    root_entry = agents.get("root", {})
+    if not (root_entry.get("coverage_report") or {}).get("rows"):
+        problems.append("state.json root record carries no coverage_report")
+    try:
+        report_md = (run_dir / "report.md").read_text(encoding="utf-8")
+        if "## Coverage" not in report_md or "tested — findings" not in report_md:
+            problems.append("report.md has no rendered coverage matrix")
+        if "unauthenticated mock run" not in report_md:
+            problems.append("report.md coverage matrix lost the skipped-row note")
+    except FileNotFoundError:
+        problems.append("report.md missing")
+    # root finished in one finish_scan (coverage filed BEFORE finishing: no bounce)
+    finish_results = [e for e in transcript if e["type"] == "tool_result"
+                      and e.get("name") == "finish_scan"]
+    if len(finish_results) != 1 or '"ok": true' not in finish_results[0].get("result", ""):
+        problems.append(f"finish_scan results wrong: {len(finish_results)} "
+                        "(coverage-filed root must finish on the first call)")
 
     # -- Phase 3: browser + proxy plumbing --------------------------------
     for want_tool in ("browser_navigate", "browser_read_page", "browser_screenshot",

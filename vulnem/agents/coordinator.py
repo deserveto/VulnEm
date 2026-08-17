@@ -134,6 +134,11 @@ class AgentRecord:
     turns_used: int = 0
     total_tokens: int = 0
     completion_report: dict[str, Any] | None = None
+    # root's coverage checklist (report_coverage tool); None until filed
+    coverage_report: dict[str, Any] | None = None
+    # finish_scan coverage bounce already used (serialized so a resumed root
+    # can never be trapped by a second bounce)
+    coverage_bounce_used: bool = False
     error: str | None = None
     stop_reason: str = ""
     # runtime wiring (not serialized)
@@ -168,6 +173,8 @@ class AgentRecord:
             "turns_used": self.turns_used,
             "total_tokens": self.total_tokens,
             "completion_report": self.completion_report,
+            "coverage_report": self.coverage_report,
+            "coverage_bounce_used": self.coverage_bounce_used,
             "error": self.error,
             "stop_reason": self.stop_reason,
         }

@@ -36,8 +36,14 @@ class FakeSandbox:
         stderr = ""
         duration = 0.01
 
+    def __init__(self):
+        self.put_files: list[tuple[bytes, str]] = []
+
     def exec(self, command: str, *, timeout: int = 120):
         return FakeSandbox._Res()
+
+    def put_file(self, data: bytes, container_path: str) -> None:
+        self.put_files.append((data, container_path))
 
 
 def _response(text: str, tool: str | None, args: dict | None, idx: int):
@@ -252,6 +258,12 @@ ROOT_SCRIPT = [
     ("", "wait_for_agents", {}),
     ("", "wait_for_agents", {}),
     ("", "view_agent_graph", {}),
+    ("", "report_coverage", {"rows": [
+        {"area": "injection", "surface": "search API inputs",
+         "status": "tested_findings", "agent": "sqli-probe"},
+        {"area": "client-side", "surface": "search page reflection",
+         "status": "tested_findings", "agent": "xss-probe"},
+    ]}),
     ("Scan complete.", "finish_scan", {"summary": "Two specialists completed; "
                                                   "one merged finding."}),
 ]
@@ -394,6 +406,9 @@ async def test_child_failure_isolated_and_parent_alerted(tmp_path):
         "root": [("", "create_agent", {"name": "doomed",
                                        "objective": "will fail"}),
                  ("", "wait_for_agents", {}),
+                 ("", "report_coverage", {"rows": [
+                     {"area": "auth flows", "surface": "none attempted",
+                      "status": "skipped", "note": "child stalled early"}]}),
                  ("", "finish_scan", {"summary": "child failed but scan continued"})],
         # doomed: text-only turns → stall → FAILED
         "doomed": [("just thinking...", None, None)] * 10,
@@ -419,6 +434,9 @@ async def test_agent_finish_rejects_bad_status(tmp_path):
     llm = ScriptedLLM({
         "root": [("", "create_agent", {"name": "kid", "objective": "o"}),
                  ("", "wait_for_agents", {}),
+                 ("", "report_coverage", {"rows": [
+                     {"area": "auth flows", "surface": "login",
+                      "status": "tested_clean", "agent": "kid"}]}),
                  ("", "finish_scan", {"summary": "s"})],
         "kid": [("", "agent_finish", {"status": "banana", "summary": "?"}),  # rejected
                 ("", "agent_finish", {"status": "failed", "summary": "blocked by waf"})],
@@ -483,8 +501,10 @@ async def test_resume_after_interrupt(tmp_path):
         "sqli-probe": _substitute(SQLI_SCRIPT, scope.target_url),
         "xss-probe": _substitute(XSS_SCRIPT, scope.target_url),
     })
-    await run_scan(scope=scope, settings=make_settings(), sandbox=FakeSandbox(),
-                   run_dir=tmp_path, completion_fn=llm)
+    # ROOT_SCRIPT grew a report_coverage turn — leave the resumed root room
+    # for its wrap-up turns within the per-agent cap
+    await run_scan(scope=scope, settings=make_settings(max_turns=16),
+                   sandbox=FakeSandbox(), run_dir=tmp_path, completion_fn=llm)
 
     state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
     root_entry = next(a for a in state["agents"] if a["name"] == "root")
@@ -558,6 +578,9 @@ async def test_real_interrupt_leaves_run_resumable(tmp_path):
                  # consumed after the resume (wait #3 is woken by sleeper)
                  ("", "wait_for_agents", {}),
                  ("", "view_agent_graph", {}),
+                 ("", "report_coverage", {"rows": [
+                     {"area": "auth flows", "surface": "probes",
+                      "status": "tested_clean"}]}),
                  ("Resumed.", "finish_scan", {"summary": "resumed done"})],
         "fast-kid": [("", "exec_command", {"command": "curl fast-probe"}),
                      ("Done.", "agent_finish", {"status": "completed", "summary": "f"})],
@@ -681,6 +704,9 @@ async def test_capped_specialist_gets_salvaged_completion_report(tmp_path):
         "root": [("", "create_agent", {"name": "mapper",
                                        "objective": "map the API"}),
                  ("", "wait_for_agents", {}),
+                 ("", "report_coverage", {"rows": [
+                     {"area": "access control", "surface": "API mapping",
+                      "status": "partial", "note": "mapper hit its cap"}]}),
                  ("", "finish_scan", {"summary": "collected salvaged report"})],
         # mapper works (prose + tool calls + a finding) but never calls
         # agent_finish → hits its per-agent cap (child_max_turns=3)
@@ -786,6 +812,9 @@ async def test_salvage_does_not_overwrite_deliberate_finish(tmp_path):
     llm = ScriptedLLM({
         "root": [("", "create_agent", {"name": "kid", "objective": "o"}),
                  ("", "wait_for_agents", {}),
+                 ("", "report_coverage", {"rows": [
+                     {"area": "auth flows", "surface": "login",
+                      "status": "tested_clean", "agent": "kid"}]}),
                  ("", "finish_scan", {"summary": "s"})],
         "kid": [("halfway there", "exec_command", {"command": "curl -s http://t"}),
                 ("", "agent_finish", {"status": "completed", "summary": "did the thing",
@@ -831,6 +860,9 @@ async def test_stalled_specialist_salvage_falls_back_to_outcome_summary(tmp_path
     llm = ScriptedLLM({
         "root": [("", "create_agent", {"name": "daydreamer", "objective": "o"}),
                  ("", "wait_for_agents", {}),
+                 ("", "report_coverage", {"rows": [
+                     {"area": "auth flows", "surface": "none",
+                      "status": "skipped", "note": "specialist stalled"}]}),
                  ("", "finish_scan", {"summary": "s"})],
         # text-only turns → stall; no assistant message ever reaches the session
         "daydreamer": [("just thinking...", None, None)] * 10,
@@ -859,7 +891,7 @@ async def test_finish_scan_sweep_salvages_live_specialists(tmp_path):
     # finalize_agent's terminal guard skips them. The sweep itself must file
     # the salvage (report + agent_end + parent message) or a mid-work
     # specialist's narrative vanishes (observed live: 976k tokens lost).
-    from vulnem.agents.graph_tools import _tool_finish_scan
+    from vulnem.agents.graph_tools import _tool_finish_scan, _tool_report_coverage
     from vulnem.agents.session import AgentSession
 
     coordinator = Coordinator(run_dir=tmp_path, budget=Budget(max_turns=100))
@@ -883,6 +915,11 @@ async def test_finish_scan_sweep_salvages_live_specialists(tmp_path):
     kid_session.messages.append(
         {"role": "assistant", "content": "Mapped 12 API routes; session flow next."})
 
+    # root files coverage first — otherwise finish_scan bounces once
+    cov = await _tool_report_coverage(root_session, {"rows": [
+        {"area": "access control", "surface": "API routes", "status": "partial",
+         "note": "scan ending mid-mission"}]})
+    assert json.loads(cov)["ok"] is True
     result = await _tool_finish_scan(root_session, {"summary": "scan done"})
 
     assert json.loads(result)["ok"] is True
@@ -944,3 +981,114 @@ async def test_only_engine_errors_skip_salvage(tmp_path):
     assert kid.completion_report is not None
     assert "AUTO-SALVAGED" in kid.completion_report["summary"]
     assert "progress note" in kid.completion_report["summary"]
+
+
+# -- coverage checklist + finish_scan single-bounce guard --------------------------
+
+
+def _transcript(run_dir):
+    return [json.loads(line) for line in
+            (run_dir / "transcript.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+@pytest.mark.asyncio
+async def test_finish_scan_bounces_once_without_coverage(tmp_path):
+    scope = Scope.from_target("http://t:80")
+    llm = ScriptedLLM({
+        "root": [("", "create_agent", {"name": "kid", "objective": "o"}),
+                 ("", "wait_for_agents", {}),
+                 ("", "finish_scan", {"summary": "no coverage yet"}),   # bounced
+                 ("Forced through.", "finish_scan", {"summary": "second call"})],
+        "kid": [("", "agent_finish", {"status": "completed", "summary": "done"})],
+    })
+    result = await run_scan(scope=scope, settings=make_settings(), sandbox=FakeSandbox(),
+                            run_dir=tmp_path, completion_fn=llm)
+    # the SECOND finish_scan always goes through — the exit never traps
+    assert result.finished and result.summary == "second call"
+
+    results = [e for e in _transcript(tmp_path)
+               if e["type"] == "tool_result" and e.get("name") == "finish_scan"]
+    assert len(results) == 2
+    first, second = (json.loads(r["result"]) for r in results)
+    assert first["ok"] is False and "report_coverage" in first["error"]
+    for floor_class in ("auth flows", "access control", "injection", "secrets"):
+        assert floor_class in first["error"]
+    assert second["ok"] is True
+    assert not (tmp_path / "coverage.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_report_coverage_files_checklist_and_unblocks_finish(tmp_path):
+    scope = Scope.from_target("http://t:80")
+    rows = [
+        {"area": "auth flows", "surface": "login + password reset",
+         "status": "tested_clean", "agent": "auth-probe"},
+        {"area": "injection", "surface": "search q param",
+         "status": "tested_findings", "agent": "sqli-probe"},
+        {"area": "upload", "surface": "none found", "status": "skipped",
+         "note": "target has no upload feature"},
+        {"area": "business logic", "surface": "checkout flow",
+         "status": "partial", "note": "budget exhausted mid-flow"},
+    ]
+    llm = ScriptedLLM({
+        "root": [("Filing coverage.", "report_coverage", {"rows": rows}),
+                 ("Done.", "finish_scan", {"summary": "with coverage"})],
+    })
+    result = await run_scan(scope=scope, settings=make_settings(), sandbox=FakeSandbox(),
+                            run_dir=tmp_path, completion_fn=llm)
+    assert result.finished  # coverage filed → no bounce
+
+    cov = json.loads((tmp_path / "coverage.json").read_text(encoding="utf-8"))
+    assert cov["filed_by"] == "root" and len(cov["rows"]) == 4
+    events = [e for e in _transcript(tmp_path) if e["type"] == "coverage_report"]
+    assert len(events) == 1 and len(events[0]["rows"]) == 4
+    state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    root_entry = next(a for a in state["agents"] if a["name"] == "root")
+    assert root_entry["coverage_report"]["rows"][0]["area"] == "auth flows"
+
+    # the floor-gap hint surfaces what the rows do NOT account for
+    tool_results = [e for e in _transcript(tmp_path)
+                    if e["type"] == "tool_result" and e.get("name") == "report_coverage"]
+    payload = json.loads(tool_results[0]["result"])
+    assert payload["ok"] is True and payload["filed"] == 4
+    assert "access control" in payload.get("floor_gaps", [])
+
+
+@pytest.mark.asyncio
+async def test_report_coverage_validates_rows_and_recovers(tmp_path):
+    scope = Scope.from_target("http://t:80")
+    llm = ScriptedLLM({
+        "root": [
+            ("Bad status.", "report_coverage", {"rows": [
+                {"area": "auth flows", "surface": "login", "status": "banana"}]}),
+            ("Skipped needs a why.", "report_coverage", {"rows": [
+                {"area": "upload", "surface": "x", "status": "skipped"}]}),
+            ("Valid at last.", "report_coverage", {"rows": [
+                {"area": "upload", "surface": "x", "status": "skipped",
+                 "note": "no upload endpoints"}]}),
+            ("Done.", "finish_scan", {"summary": "recovered"}),
+        ],
+    })
+    result = await run_scan(scope=scope, settings=make_settings(), sandbox=FakeSandbox(),
+                            run_dir=tmp_path, completion_fn=llm)
+    assert result.finished and result.summary == "recovered"
+    results = [json.loads(e["result"]) for e in _transcript(tmp_path)
+               if e["type"] == "tool_result" and e.get("name") == "report_coverage"]
+    assert results[0]["ok"] is False and "status must be one of" in results[0]["error"]
+    assert results[1]["ok"] is False and "add a note saying why" in results[1]["error"]
+    assert results[2]["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_solo_mode_never_bounces(tmp_path):
+    """The bounce is root-only: solo has no report_coverage tool and its
+    finish_scan must never be gated (existing contract, pinned here)."""
+    from vulnem.scan import ROOT_TOOLS, SOLO_TOOLS
+
+    assert "report_coverage" in ROOT_TOOLS
+    assert "report_coverage" not in SOLO_TOOLS
+    scope = Scope.from_target("http://t:80")
+    llm = ScriptedLLM({"solo": [("Done.", "finish_scan", {"summary": "s"})]})
+    result = await run_scan(scope=scope, settings=make_settings(), sandbox=FakeSandbox(),
+                            run_dir=tmp_path, solo=True, completion_fn=llm)
+    assert result.finished and result.stop_reason == "finish_tool"
